@@ -49,6 +49,20 @@ function sendBuiltins(p: BuiltinsPayload | undefined): void {
 document.addEventListener('zero:crash', () => ipcRenderer.send('zero:crash'));
 ipcRenderer.on('zero:builtins', (_e, p: BuiltinsPayload) => sendBuiltins(p));
 
+// ZERO's logo on Discord's home button (top of the server list), for every theme.
+const LOGO = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="#15171c"/><path d="M84 52h88c22.1 0 40 17.9 40 40v58c0 22.1-17.9 40-40 40h-52l-34.6 25.4c-3.3 2.4-7.9 0-7.9-4.1V188.6C62.4 184.2 44 169.4 44 150V92c0-22.1 17.9-40 40-40z" fill="#7c8cff"/><path d="M92 86h74v15.5l-50.5 50H166V168H90v-15.5l50.5-50H92z" fill="#15171c"/></svg>';
+function addBrand(): void {
+  if (document.getElementById('zero-brand')) return;
+  const st = document.createElement('style');
+  st.id = 'zero-brand';
+  const home = '[data-list-item-id="guildsnav___home"]';
+  const box = `${home}[class*="childWrapper_"],${home} [class*="childWrapper_"]`;
+  st.textContent = `${box}{background:#15171c url("data:image/svg+xml,${encodeURIComponent(LOGO)}") center/cover no-repeat!important}`
+    + `${home}[class*="childWrapper_"] svg,${home} [class*="childWrapper_"] svg{visibility:hidden!important}`;
+  (document.head ?? document.documentElement).appendChild(st);
+}
+if (document.documentElement) addBrand(); else document.addEventListener('DOMContentLoaded', addBrand, { once: true });
+
 const controller = createThemeController(document);
 const launcher = createLauncher(document, {
   open: () => ipcRenderer.send('zero:openSettings'),

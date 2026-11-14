@@ -86,21 +86,22 @@ export function zeroRuntime(): void {
   }
   function dispatcher(): any {
     if (D) return D;
-    eachExport((v) => {
-      if (typeof v === 'object' && typeof v.dispatch === 'function' && typeof v.subscribe === 'function' && v._subscriptions) { D = v; return true; }
+    // The real Flux dispatcher is the one every store is registered with. (Several modules export look-alike
+    // wrappers; events from Discord's servers never pass through those.)
+    const d = (store('UserStore') ?? store('MessageStore'))?._dispatcher;
+    if (!d || typeof d.dispatch !== 'function' || typeof d.subscribe !== 'function' || typeof d.addInterceptor !== 'function') return null;
+    D = d;
+    // Discord's own interceptor hook: runs before any store sees an action; returning true swallows it.
+    // Hooks may adjust the action in place, or return null to swallow it.
+    D.addInterceptor((action: any) => {
+      if (!hooks.size || !action || typeof action.type !== 'string') return false;
+      for (const h of hooks) {
+        let out: any = action;
+        try { out = h(action); } catch { /* a plugin error never blocks Discord */ }
+        if (out === null) return true;
+      }
+      return false;
     });
-    if (D) {
-      const original = D.dispatch;
-      D.dispatch = function (this: any, action: any) {
-        if (hooks.size && action && typeof action.type === 'string') {
-          for (const h of hooks) {
-            try { action = h(action); } catch { /* a plugin error never blocks Discord */ }
-            if (!action) return Promise.resolve();
-          }
-        }
-        return original.call(this, action);
-      };
-    }
     return D;
   }
   function on(type: string, fn: (a: any) => void): () => void {
@@ -269,29 +270,34 @@ export function zeroRuntime(): void {
     };
   }
 
-  // MessageLogger (memory only)
+  // MessageLogger (memory only): deleted messages stay on screen with a red background; right click to clear them
   {
     let s: Settings = {};
-    const deleted = new Set<string>();
+    const deleted = new Map<string, { channelId: string; guildId?: string }>();
     const edits = new Map<string, string[]>();
+    const bypass = new Set<string>();
+    let menu: HTMLElement | null = null;
     const trim = () => {
-      while (deleted.size > 2000) deleted.delete(deleted.values().next().value!);
+      while (deleted.size > 2000) deleted.delete(deleted.keys().next().value!);
       while (edits.size > 2000) edits.delete(edits.keys().next().value!);
     };
     const ignored = (msg: any) => !msg || (s.ignoreSelf && msg.author?.id === me()) || (s.ignoreBots && msg.author?.bot);
     const hook = (a: any) => {
       const M = store('MessageStore');
       if (a.type === 'MESSAGE_DELETE') {
+        if (bypass.delete(a.id)) return a; // "Remove logged message": let Discord really remove it
         const msg = M?.getMessage?.(a.channelId, a.id);
         if (ignored(msg)) return a;
-        deleted.add(a.id); trim(); schedule();
+        deleted.set(a.id, { channelId: a.channelId, guildId: a.guildId }); trim(); schedule();
         return null;
       }
       if (a.type === 'MESSAGE_DELETE_BULK' && Array.isArray(a.ids)) {
-        const keep = a.ids.filter((id: string) => ignored(M?.getMessage?.(a.channelId, id)));
-        for (const id of a.ids) if (!keep.includes(id)) deleted.add(id);
+        const keep = a.ids.filter((id: string) => bypass.delete(id) || ignored(M?.getMessage?.(a.channelId, id)));
+        for (const id of a.ids) if (!keep.includes(id)) deleted.set(id, { channelId: a.channelId, guildId: a.guildId });
         trim(); schedule();
-        return keep.length ? { ...a, ids: keep } : null;
+        if (!keep.length) return null;
+        a.ids = keep;
+        return a;
       }
       if (a.type === 'MESSAGE_UPDATE' && s.logEdits && a.message && typeof a.message.content === 'string') {
         const old = M?.getMessage?.(a.message.channel_id, a.message.id);
@@ -302,6 +308,20 @@ export function zeroRuntime(): void {
       }
       return a;
     };
+    /** Really removes logged messages from the chat, as Discord would have done */
+    function purge(ids: string[]): void {
+      const d = dispatcher();
+      for (const id of ids) {
+        const info = deleted.get(id);
+        deleted.delete(id);
+        edits.delete(id);
+        if (!info || !d) continue;
+        bypass.add(id);
+        try { d.dispatch({ type: 'MESSAGE_DELETE', id, channelId: info.channelId, guildId: info.guildId }); } catch { bypass.delete(id); }
+      }
+      schedule();
+    }
+    const idsIn = (channelId: string | null) => (channelId ? [...deleted].filter(([, v]) => v.channelId === channelId).map(([id]) => id) : []);
     const pass = () => {
       if (!deleted.size && !edits.size) return;
       for (const li of document.querySelectorAll<HTMLElement>('li[id^="chat-messages-"]')) {
@@ -320,24 +340,90 @@ export function zeroRuntime(): void {
         content.before(box);
       }
     };
+
+    // right-click menu
+    const closeMenu = () => {
+      if (!menu) return;
+      menu.remove(); menu = null;
+      document.removeEventListener('mousedown', outside, true);
+      document.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('blur', closeMenu);
+      window.removeEventListener('resize', closeMenu);
+      document.removeEventListener('wheel', closeMenu, true);
+    };
+    const outside = (e: MouseEvent) => { if (!menu?.contains(e.target as Node)) closeMenu(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); closeMenu(); } };
+    function openMenu(x: number, y: number, items: { label: string; run: () => void }[]): void {
+      closeMenu();
+      const m = h('div', 'zero-menu');
+      menu = m;
+      m.setAttribute('role', 'menu');
+      m.append(h('div', 'zero-menu-head', 'MessageLogger'));
+      for (const it of items) {
+        const b = h('button', 'zero-menu-item', it.label) as HTMLButtonElement;
+        b.type = 'button';
+        b.setAttribute('role', 'menuitem');
+        b.addEventListener('click', () => { closeMenu(); it.run(); });
+        m.append(b);
+      }
+      document.body.append(m);
+      const r = m.getBoundingClientRect();
+      m.style.left = Math.max(8, Math.min(x, innerWidth - r.width - 8)) + 'px';
+      m.style.top = Math.max(8, Math.min(y, innerHeight - r.height - 8)) + 'px';
+      document.addEventListener('mousedown', outside, true);
+      document.addEventListener('keydown', onKey, true);
+      window.addEventListener('blur', closeMenu);
+      window.addEventListener('resize', closeMenu);
+      document.addEventListener('wheel', closeMenu, true);
+    }
+    const onContext = (e: MouseEvent) => {
+      const t = e.target as Element | null;
+      if (!t?.closest || t.closest('.zero-menu')) return;
+      const li = t.closest('li[id^="chat-messages-"]');
+      const here = store('SelectedChannelStore')?.getChannelId?.() ?? null;
+      if (li?.hasAttribute('data-zero-deleted')) {
+        const mid = li.id.split('-').pop()!;
+        const all = idsIn(deleted.get(mid)?.channelId ?? here);
+        e.preventDefault(); e.stopPropagation();
+        openMenu(e.clientX, e.clientY, [
+          { label: 'Remove logged message', run: () => purge([mid]) },
+          ...(all.length > 1 ? [{ label: `Remove all logged deleted messages (${all.length})`, run: () => purge(all) }] : []),
+        ]);
+        return;
+      }
+      if (li || t.closest('form, [class*="channelTextArea_"], [role="menu"], a, img, video')) return;
+      if (!t.closest('[data-list-id="chat-messages"], [class*="messagesWrapper_"], [class*="chatContent_"]')) return;
+      const all = idsIn(here);
+      if (!all.length) return;
+      e.preventDefault(); e.stopPropagation();
+      openMenu(e.clientX, e.clientY, [{ label: `Remove all logged deleted messages (${all.length})`, run: () => purge(all) }]);
+    };
+
     plugins.messageLogger = {
       start(next) {
         s = next;
         dispatcher(); hooks.add(hook); addDom(pass);
+        document.addEventListener('contextmenu', onContext, true);
         setCss('messageLogger', [
-          'li[data-zero-deleted] [id^="message-content-"],li[data-zero-deleted] [id^="message-accessories-"]{color:#f23f43!important;opacity:.85}',
-          'li[data-zero-deleted] [id^="message-content-"]::after{content:" (deleted)";font-size:11px;color:#f23f43;opacity:.8}',
+          'li[data-zero-deleted]>div{background:rgba(242,63,67,.13)!important;box-shadow:inset 3px 0 0 #f23f43}',
+          'li[data-zero-deleted]>div:hover{background:rgba(242,63,67,.19)!important}',
+          'li[data-zero-deleted] [id^="message-content-"]::after{content:"deleted";display:inline-block;margin-left:6px;padding:0 5px;border-radius:4px;background:#f23f43;color:#fff;font-size:10px;font-weight:700;line-height:15px;text-transform:uppercase;vertical-align:1px}',
           '.zero-edit{font-size:.92em;color:var(--text-muted,#949ba4);white-space:pre-wrap;word-break:break-word}',
           '.zero-edit::after{content:" (edited)";font-size:11px;opacity:.7}',
+          '.zero-menu{position:fixed;z-index:100000;min-width:230px;padding:6px 8px;border-radius:8px;background:var(--background-floating,#111214);box-shadow:0 8px 24px rgba(0,0,0,.35),0 0 0 1px rgba(255,255,255,.06);font-family:var(--font-primary,"gg sans","Segoe UI",sans-serif)}',
+          '.zero-menu-head{padding:4px 8px 6px;font-size:11px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;color:var(--text-muted,#949ba4)}',
+          '.zero-menu-item{display:block;width:100%;margin:2px 0;padding:8px;border:0;border-radius:4px;background:none;color:#f23f43;font-family:inherit;font-size:14px;font-weight:500;line-height:18px;text-align:left;cursor:pointer}',
+          '.zero-menu-item:hover,.zero-menu-item:focus-visible{background:#da373c;color:#fff;outline:none}',
         ].join(''));
       },
       stop() {
-        hooks.delete(hook); removeDom(pass);
+        hooks.delete(hook); removeDom(pass); closeMenu();
+        document.removeEventListener('contextmenu', onContext, true);
+        purge([...deleted.keys()]); // turning the logger off removes the messages it kept
+        edits.clear();
         document.querySelectorAll('.zero-edits').forEach((e) => e.remove());
         document.querySelectorAll('[data-zero-deleted]').forEach((e) => e.removeAttribute('data-zero-deleted'));
         setCss('messageLogger', null);
-        // messages kept on screen after deletion stay until the channel reloads; the log itself is dropped
-        edits.clear();
       },
     };
   }
