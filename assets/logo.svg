@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <rect x="8" y="8" width="240" height="240" rx="62" fill="#15171c"/>
+  <rect x="8.75" y="8.75" width="238.5" height="238.5" rx="61.25" fill="none" stroke="#ffffff" stroke-opacity=".07" stroke-width="1.5"/>
+  <!-- chat bubble -->
+  <path d="M84 52h88c22.1 0 40 17.9 40 40v58c0 22.1-17.9 40-40 40h-52l-34.6 25.4c-3.3 2.4-7.9 0-7.9-4.1V188.6C62.4 184.2 44 169.4 44 150V92c0-22.1 17.9-40 40-40z" fill="#7c8cff"/>
+  <!-- Z -->
+  <path d="M92 86h74v15.5l-50.5 50H166V168H90v-15.5l50.5-50H92z" fill="#15171c"/>
+</svg>
