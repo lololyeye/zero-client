@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import { createThemeController, type ApplyPayload } from './controller';
 import { createLauncher } from './launcher';
 import { zeroRuntime } from './runtime';
+import { zeroMediaStats } from './mediastats';
 import { customActivity, type SettingValue } from '../shared/builtins';
 
 interface BuiltinsPayload { plugins: Record<string, Record<string, SettingValue>>; game: { id: string; name: string; start: number } | null }
@@ -47,6 +48,17 @@ function sendBuiltins(p: BuiltinsPayload | undefined): void {
   document.dispatchEvent(new CustomEvent('zero:cfg', { detail: JSON.stringify({ plugins, game: p.game }) }));
 }
 document.addEventListener('zero:crash', () => ipcRenderer.send('zero:crash'));
+
+// Voice / stream diagnostics (Settings > Performance, only while that page is open). See mediastats.ts.
+try { contextBridge.executeInMainWorld({ func: zeroMediaStats }); } catch { /* diagnostics unavailable */ }
+ipcRenderer.on('zero:rtc-req', (_e, id: number) => {
+  let done = false;
+  const reply = (detail: string) => { if (done) return; done = true; document.removeEventListener('zero:rtc', onRtc); ipcRenderer.send('zero:rtc', id, detail.slice(0, 64_000)); };
+  const onRtc = (e: Event) => reply(String((e as CustomEvent).detail ?? ''));
+  document.addEventListener('zero:rtc', onRtc);
+  setTimeout(() => reply('{"connections":0,"streams":[]}'), 2000);
+  document.dispatchEvent(new CustomEvent('zero:rtc-req'));
+});
 ipcRenderer.on('zero:builtins', (_e, p: BuiltinsPayload) => sendBuiltins(p));
 
 // ZERO's logo on Discord's home button (top of the server list), for every theme.

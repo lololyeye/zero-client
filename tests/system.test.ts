@@ -5,7 +5,7 @@ import path from 'node:path';
 import { loadPlugins } from '../src/main/plugins';
 import { validateManifest, PluginManifestError } from '../src/shared/plugin';
 import { redact, Logger } from '../src/main/logger';
-import { detectMemoryGrowth, summarizeMetrics } from '../src/main/perf';
+import { detectMemoryGrowth, recommendations, sessionGrowth, stallStats, summarizeMetrics } from '../src/main/perf';
 import { evaluateCompat, COMPAT_PROBE_SCRIPT } from '../src/main/inject';
 import { ImageStore, sniffImage, targetSize } from '../src/main/images';
 import { PRESETS, compileThemeCss } from '../src/shared/theme';
@@ -91,6 +91,30 @@ describe('performance monitoring', () => {
     expect(detectMemoryGrowth(Array.from({ length: 30 }, (_, i) => 200 + i * 2)).growing).toBe(true);
     expect(detectMemoryGrowth(Array.from({ length: 30 }, (_, i) => 200 + (i % 2 ? 1 : -1))).growing).toBe(false);
     expect(detectMemoryGrowth([1, 2]).growing).toBe(false);
+  });
+  it('prefers private memory (what Task Manager shows) and names utility processes', () => {
+    const s = summarizeMetrics([{ pid: 1, type: 'Tab', cpu: { percentCPUUsage: 0 }, memory: { workingSetSize: 600 * 1024, privateBytes: 500 * 1024 } }, { pid: 2, type: 'Utility', name: 'Audio Service', cpu: { percentCPUUsage: 0 }, memory: { workingSetSize: 90 * 1024, privateBytes: 10 * 1024 } }]);
+    expect(s.ramMb).toBe(510); expect(s.processes[1]!.type).toBe('Audio Service');
+  });
+  it('reports session growth per hour, ignoring the first 10 minutes of cache filling', () => {
+    expect(sessionGrowth(Array.from({ length: 20 }, () => 400))).toBeNull();
+    const warmupThenFlat = [...Array.from({ length: 10 }, (_, i) => 200 + i * 20), ...Array.from({ length: 60 }, () => 400)];
+    expect(sessionGrowth(warmupThenFlat)).toBe(0);
+    expect(sessionGrowth(Array.from({ length: 70 }, (_, i) => 400 + i))).toBe(60); // +1 MB per minute
+  });
+  it('summarizes main-process timer lateness', () => {
+    expect(stallStats([1, 2])).toBeNull();
+    expect(stallStats([...Array.from({ length: 99 }, () => 2), 180])).toEqual({ p50: 2, p99: 180, max: 180 });
+  });
+  it('recommends only from measured problems', () => {
+    const ok = { hardwareAcceleration: true, gpuFeatures: { video_encode: 'enabled' }, session: { minutes: 0, ramMb: [], growthMbPerHour: null }, media: null, eventLoop: { p50: 1, p99: 5, max: 9 }, profile: 'balanced' as const, ramMb: 500 };
+    expect(recommendations(ok)).toEqual([]);
+    expect(recommendations({ ...ok, hardwareAcceleration: false })[0]!.text).toMatch(/Hardware acceleration is off/);
+    const cpuStream = { connections: 1, streams: [{ dir: 'send' as const, kind: 'video' as const, codec: 'VP8', kbps: 4000, hw: false, impl: 'libvpx', limit: 'cpu' }] };
+    const r = recommendations({ ...ok, media: cpuStream }).map((x) => x.text).join(' ');
+    expect(r).toMatch(/encoded on the CPU/); expect(r).toMatch(/CPU is busy/);
+    const dropouts = { connections: 1, streams: [{ dir: 'recv' as const, kind: 'audio' as const, codec: 'opus', kbps: 64, concealedPct: 4.2 }] };
+    expect(recommendations({ ...ok, media: dropouts })[0]!.text).toMatch(/4.2% of received voice/);
   });
 });
 

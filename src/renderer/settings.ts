@@ -6,7 +6,7 @@ import { type Config, type LayoutProfile, type PerfOptions, type PerfProfile } f
 import { PERMISSIONS, type PluginInfo } from '../shared/plugin';
 import { BUILTINS, type BuiltinDef, type SettingValue } from '../shared/builtins';
 import type { Channel } from '../shared/ipc';
-import type { PerfSnapshot } from '../main/perf';
+import type { MediaStream, PerfSnapshot } from '../main/perf';
 import type { CompatReport } from '../main/inject';
 import type { UpdateState } from '../main/updates';
 
@@ -503,66 +503,109 @@ sect('layout', 'Layout', 'Appearance', 'density compact comfortable width sideba
 
 // ---- Performance ----
 const PERF_INFO: Record<keyof PerfOptions, [string, string]> = {
-  backgrounds: ['Background images', 'Show area backgrounds in Discord.'],
-  blur: ['Blur effects', 'Menu blur, glass and background blur. The most GPU-hungry effect.'],
-  animations: ['Animations', 'Discord’s and ZERO’s transitions.'],
-  pauseWhenUnfocused: ['Pause when unfocused', 'Stops animated emoji and avatars while you are in another app.'],
-  spellcheck: ['Spellcheck', 'Dictionaries for the message box.'],
-  backgroundThrottle: ['Throttle when hidden', 'Lets Chromium slow Discord while minimized. Voice and notifications keep working. Applies after restart.'],
+  backgrounds: ['Background images', 'Your theme’s background images. Each one costs memory (about 15 MB decoded at 2560 px) and GPU work when scrolling.'],
+  blur: ['Blur effects', 'Menu blur, glass and background blur. The most GPU-hungry effect: it is redrawn whenever what is behind it moves.'],
+  animations: ['Animations', 'ZERO’s and Discord’s transitions. Off makes them instant.'],
+  pauseWhenUnfocused: ['Pause when unfocused', 'Freezes CSS animations while you are in another app (a game on your other screen). Discord already stops GIFs and animated avatars by itself.'],
+  spellcheck: ['Spellcheck', 'Underlines spelling mistakes while you type. Small cost, only while typing.'],
+  backgroundThrottle: ['Throttle when hidden', 'Lets Chromium slow Discord while it is minimized or covered by a fullscreen game. Calls, streams and notifications keep working.'],
 };
+const PROFILE_NAMES: Record<PerfProfile, string> = { balanced: 'Balanced', performance: 'Performance', lowResource: 'Low Resource', custom: 'Custom' };
 
-sect('performance', 'Performance', 'Client', 'ram cpu gpu memory startup profile lightweight balanced custom throttle dashboard modules spellcheck blur', () => {
+sect('performance', 'Performance', 'Client', 'ram cpu gpu memory startup profile low resource performance balanced custom throttle diagnostics voice stream encoder nvenc fps leak', () => {
   const cfg = state.config;
   const stat = (id: string, label: string) => h('div', {}, h('b', { id }, '–'), h('span', {}, label));
-  const prof = (p: PerfProfile, name: string, desc: string) => h('button', { class: 'prof', 'aria-pressed': String(cfg.performance.profile === p), onclick: () => call('perf:set', { profile: p }) }, h('b', {}, name), h('span', {}, desc));
+  const prof = (p: PerfProfile, desc: string) => h('button', { class: 'prof', 'aria-pressed': String(cfg.performance.profile === p), onclick: () => call('perf:set', { profile: p }) }, h('b', {}, PROFILE_NAMES[p]), h('span', {}, desc));
   const opts = state.perf;
   const custom = cfg.performance.profile === 'custom';
-  const root = page('Performance', 'Live numbers from this app. Sampling only runs while this page is open.',
+  const root = page('Performance', 'Live numbers from this app. Detailed sampling only runs while this page is open.',
     h('div', { class: 'stats' }, stat('s-ram', 'Memory'), stat('s-cpu', 'CPU'), stat('s-start', 'Startup'), stat('s-prof', 'Profile')),
-    h('div', { class: 'chart' }, h('canvas', { class: 'spark', id: 'spark', 'aria-label': 'Memory over the last two minutes' }), h('div', { class: 'muted small', id: 's-grow' }, 'Collecting samples…')),
+    h('div', { class: 'chart' }, h('canvas', { class: 'spark', id: 'spark', 'aria-label': 'Memory over time' }), h('div', { class: 'muted small', id: 's-grow' }, 'Collecting samples…')),
     h('div', { class: 'procs', id: 's-procs' }),
+    h('div', { id: 's-recs', class: 'recs' }),
     h('h2', {}, 'Profile'),
-    h('div', { class: 'profiles' },
-      prof('balanced', 'Balanced', 'Everything on: full theme, backgrounds, blur and animations.'),
-      prof('lightweight', 'Lightweight', 'Keeps colors and backgrounds. No blur, animations or spellcheck.'),
-      prof('custom', 'Custom', 'Choose each option yourself.')),
+    h('p', { class: 'muted small' }, 'Changes apply instantly, without reloading Discord: a call or stream in progress is never cut. No profile turns off hardware acceleration, which streaming needs.'),
+    h('div', { class: 'profiles four' },
+      prof('balanced', 'Everything your theme asks for.'),
+      prof('performance', 'Same look, without blur and transitions. For gaming while ZERO stays open.'),
+      prof('lowResource', 'Also drops background images and spellcheck. For low-end PCs, or gaming and streaming on one GPU.'),
+      prof('custom', 'Choose each option yourself.')),
     h('h2', {}, 'Options'),
     rows(...(Object.keys(PERF_INFO) as (keyof PerfOptions)[]).map((k) => row(PERF_INFO[k][0], PERF_INFO[k][1],
       custom ? toggle(cfg.performance.custom[k], (v) => call('perf:set', { custom: { [k]: v } }), PERF_INFO[k][0])
         : h('span', { class: 'pill ' + (opts[k] ? 'ok' : ''), title: 'Switch to Custom to change it' }, opts[k] ? 'On' : 'Off')))),
+    h('h2', {}, 'Voice and stream'),
+    h('p', { class: 'muted small' }, 'Read from Discord’s own call connections: codec, encoder, frame rate, dropouts. Never addresses, names or content.'),
+    h('div', { id: 's-media', class: 'media' }, h('div', { class: 'muted small' }, 'Not in a call.')),
     h('h2', {}, 'Details'),
-    h('div', { class: 'muted small', id: 's-gpu' }), h('div', { class: 'muted small', id: 's-mod', style: 'margin-top:4px' }), h('ul', { class: 'plain', id: 's-bg' }));
+    h('div', { class: 'muted small', id: 's-gpu' }), h('div', { class: 'muted small', id: 's-feat', style: 'margin-top:4px' }),
+    h('div', { class: 'muted small', id: 's-loop', style: 'margin-top:4px' }), h('div', { class: 'muted small', id: 's-mod', style: 'margin-top:4px' }), h('ul', { class: 'plain', id: 's-bg' }));
   queueMicrotask(startPerf);
   return root;
 });
 
-async function samplePerf() {
-  const r = await window.zero.invoke('perf:snapshot'); if (!r.ok) return;
-  const s = r.data as PerfSnapshot;
-  const set = (id: string, v: string) => { const e = document.getElementById(id); if (e) e.textContent = v; };
-  set('s-ram', s.ramMb.toFixed(0) + ' MB'); set('s-cpu', s.cpuPercent.toFixed(1) + '%');
-  set('s-start', s.startupMs ? s.startupMs + ' ms' : 'n/a'); set('s-prof', s.profile[0]!.toUpperCase() + s.profile.slice(1));
-  set('s-gpu', 'GPU: ' + s.gpu); set('s-mod', 'Active modules: ' + s.activeModules.join(', '));
-  const bg = document.getElementById('s-bg'); if (bg) bg.replaceChildren(...s.background.map((b) => h('li', {}, b)));
-  const pr = document.getElementById('s-procs');
-  if (pr) pr.replaceChildren(...s.processes.sort((a, b) => b.ramMb - a.ramMb).map((p) => h('span', { class: 'pill' }, `${p.type} · ${p.ramMb.toFixed(0)} MB`)));
-  perfHistory.push(s.ramMb); if (perfHistory.length > 60) perfHistory.shift();
-  const c = document.getElementById('spark') as HTMLCanvasElement | null; if (!c) return;
+const fmtStream = (m: MediaStream): string => {
+  const what = m.kind === 'video' ? (m.dir === 'send' ? 'Your stream / camera' : 'Watching') : (m.dir === 'send' ? 'Your microphone' : 'Voice received');
+  const bits: string[] = [];
+  if (m.codec) bits.push(m.codec);
+  if (m.kind === 'video') {
+    if (m.width && m.height) bits.push(m.width + '×' + m.height);
+    if (m.fps != null) bits.push(Math.round(m.fps) + ' fps');
+    if (m.hw != null) bits.push(m.hw ? 'hardware' : 'CPU (software)');
+    if (m.impl) bits.push(m.impl);
+    if (m.limit && m.limit !== 'none') bits.push('limited by ' + m.limit);
+    if (m.freezes) bits.push(m.freezes + ' freezes');
+  } else if (m.dir === 'recv') {
+    if (m.concealedPct != null) bits.push(m.concealedPct + '% concealed');
+    if (m.jitterMs != null) bits.push('jitter ' + m.jitterMs + ' ms');
+  }
+  if (m.kbps != null) bits.push(m.kbps + ' kbps');
+  return what + ': ' + bits.join(' · ');
+};
+
+function drawSpark(points: number[]) {
+  const c = document.getElementById('spark') as HTMLCanvasElement | null; if (!c || points.length < 2) return;
   const dpr = window.devicePixelRatio || 1, w = c.clientWidth, hh = c.clientHeight;
   if (c.width !== Math.round(w * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(hh * dpr); }
   const g = c.getContext('2d')!; g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, hh);
-  const max = Math.max(...perfHistory) * 1.05, min = Math.min(...perfHistory) * 0.95;
-  const pts = perfHistory.map((v, i) => [(i / 59) * w, hh - 2 - ((v - min) / Math.max(1, max - min)) * (hh - 4)] as const);
+  const max = Math.max(...points) * 1.05, min = Math.min(...points) * 0.95;
+  const pts = points.map((v, i) => [(i / (points.length - 1)) * w, hh - 2 - ((v - min) / Math.max(1, max - min)) * (hh - 4)] as const);
   g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
   g.strokeStyle = '#8e9bff'; g.lineWidth = 2; g.lineJoin = 'round'; g.stroke();
   const last = pts[pts.length - 1]!;
   g.lineTo(last[0], hh); g.lineTo(0, hh); g.closePath();
   const fill = g.createLinearGradient(0, 0, 0, hh); fill.addColorStop(0, 'rgba(91,107,240,.28)'); fill.addColorStop(1, 'rgba(91,107,240,0)');
   g.fillStyle = fill; g.fill();
-  if (perfHistory.length >= 20) {
-    const n = perfHistory.length; const slope = (perfHistory[n - 1]! - perfHistory[0]!) / n;
-    set('s-grow', slope > 1 ? `Memory is rising by about ${slope.toFixed(1)} MB per sample.` : 'Memory is stable.');
-  } else set('s-grow', 'Memory over the last two minutes.');
+}
+
+async function samplePerf() {
+  const r = await window.zero.invoke('perf:snapshot'); if (!r.ok) return;
+  const s = r.data as PerfSnapshot;
+  const set = (id: string, v: string) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+  set('s-ram', s.ramMb.toFixed(0) + ' MB'); set('s-cpu', s.cpuPercent.toFixed(1) + '%');
+  set('s-start', s.startupMs ? s.startupMs + ' ms' : 'n/a'); set('s-prof', PROFILE_NAMES[s.profile]);
+  set('s-gpu', 'GPU: ' + s.gpu + (s.hardwareAcceleration ? '' : ' (hardware acceleration off)'));
+  const feat = Object.entries(s.gpuFeatures).map(([k, v]) => k.replace(/_/g, ' ') + ': ' + v.replace(/_/g, ' ')).join(' · ');
+  set('s-feat', feat ? 'Chromium: ' + feat : '');
+  set('s-loop', s.eventLoop ? 'ZERO main process: ' + (s.eventLoop.max < 50 ? 'no stalls' : 'stalls up to ' + Math.round(s.eventLoop.max) + ' ms') + ' (timer lateness ' + s.eventLoop.p50 + ' ms typical, ' + s.eventLoop.p99 + ' ms worst 1%)' : 'ZERO main process: measuring…');
+  set('s-mod', 'Active modules: ' + s.activeModules.join(', '));
+  const bg = document.getElementById('s-bg'); if (bg) bg.replaceChildren(...s.background.map((b) => h('li', {}, b)));
+  const pr = document.getElementById('s-procs');
+  if (pr) pr.replaceChildren(...s.processes.sort((a, b) => b.ramMb - a.ramMb).map((p) => h('span', { class: 'pill', title: p.cpu + '% CPU' }, p.type + ' · ' + p.ramMb.toFixed(0) + ' MB')));
+  const recs = document.getElementById('s-recs');
+  if (recs) recs.replaceChildren(...s.recommendations.map((x) => h('div', { class: 'rec ' + x.level }, x.text)));
+  const media = document.getElementById('s-media');
+  if (media) {
+    const list = s.media?.streams ?? [];
+    media.replaceChildren(...(list.length ? list.map((m) => h('div', { class: 'small' }, fmtStream(m))) : [h('div', { class: 'muted small' }, 'Not in a call.')]));
+  }
+  perfHistory.push(s.ramMb); if (perfHistory.length > 60) perfHistory.shift();
+  // Long view (one point per minute since start) once there are a few minutes of it.
+  const long = s.session.ramMb.length >= 5;
+  drawSpark(long ? [...s.session.ramMb, s.ramMb] : perfHistory);
+  const g = s.session.growthMbPerHour;
+  if (long) set('s-grow', 'Memory since start (' + Math.round(s.session.minutes / 6) / 10 + ' h). ' + (g === null ? 'Trend after 40 minutes.' : g > 30 ? 'Rising by about ' + Math.round(g) + ' MB per hour.' : 'Stable (' + (g >= 0 ? '+' : '') + Math.round(g) + ' MB/h).'));
+  else set('s-grow', 'Memory over the last two minutes. The long-term trend appears after a few minutes.');
 }
 function startPerf() { stopPerf(); void samplePerf(); perfTimer = window.setInterval(() => { if (!document.hidden) void samplePerf(); }, 2000); }
 function stopPerf() { if (perfTimer) { window.clearInterval(perfTimer); perfTimer = undefined; } }

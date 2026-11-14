@@ -7,7 +7,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { compileThemeCss, DEFAULT_THEME, DISCORD_ANCHORS, DISCORD_VARIABLE_MAP, PRESETS, validateTheme, type Anchors, type Theme } from '../src/shared/theme';
-import { defaultConfig, migrateConfig, resolvePerf, sanitizeConfig } from '../src/shared/config';
+import { defaultConfig, migrateConfig, PERF_PRESETS, resolvePerf, sanitizeConfig, toPerfProfile } from '../src/shared/config';
 import { applyThemeEdit, composeDiscordCss, referencedImages } from '../src/main/compose';
 import { createThemeController, routeKind } from '../src/preload/controller';
 import { ImageStore } from '../src/main/images';
@@ -156,9 +156,12 @@ describe('composition (main process single source of truth)', () => {
     c.themes['t'] = { ...layer({ area: 'chat', blur: 5 }), id: 't' }; c.activeThemeId = 't';
     const css = composeDiscordCss(c, ['.x{--p:1}'], new Set());
     expect(css).toContain('--zero-bg'); expect(css).toContain('/* layout */'); expect(css).toContain('.x{--p:1}'); expect(css).toContain('blur(5px)');
-    c.performance.profile = 'lightweight';
+    c.performance.profile = 'performance';
     expect(composeDiscordCss(c, [], new Set())).not.toContain('blur(');
-    expect(resolvePerf(c).spellcheck).toBe(false);
+    expect(resolvePerf(c).spellcheck).toBe(true);
+    c.performance.profile = 'lowResource';
+    expect(composeDiscordCss(c, [], new Set())).not.toContain('abc123'); // no background image at all
+    expect(resolvePerf(c)).toMatchObject({ backgrounds: false, blur: false, animations: false, spellcheck: false, backgroundThrottle: true });
   });
   it('lists referenced images for the missing-image check', () => {
     const c = defaultConfig(); c.themes['t'] = { ...layer({ area: 'chat' }), id: 't' };
@@ -166,14 +169,26 @@ describe('composition (main process single source of truth)', () => {
   });
 });
 
+describe('performance profiles', () => {
+  it('accepts the new names and the pre-0.4 lightweight name', () => {
+    expect(toPerfProfile('lightweight')).toBe('performance');
+    expect(toPerfProfile('lowResource')).toBe('lowResource');
+    expect(toPerfProfile('turbo')).toBe('balanced');
+    expect(sanitizeConfig({ performance: { profile: 'lightweight' } }).performance.profile).toBe('performance');
+  });
+  it('never trades away what calls need: every preset keeps throttling for hidden windows only', () => {
+    for (const p of ['balanced', 'performance', 'lowResource'] as const) expect(PERF_PRESETS[p].backgroundThrottle).toBe(true);
+  });
+});
+
 describe('config migration v2 -> v3', () => {
-  it('maps the old lightweight switches onto the Lightweight profile and drops removed layout fields', () => {
+  it('maps the old lightweight switches onto the Performance profile and drops removed layout fields', () => {
     const { config, migratedFrom } = migrateConfig({
       version: 2, activeLayoutId: 'daily', performance: { profile: 'normal', backgroundThrottle: false },
       layouts: { daily: { id: 'daily', name: 'Daily', profile: 'lightweight', serverLabels: true, timestampFormat: '24h' } },
     });
     expect(migratedFrom).toBe(2);
-    expect(config.performance.profile).toBe('lightweight');
+    expect(config.performance.profile).toBe('performance');
     expect(config.performance.custom.backgroundThrottle).toBe(false);
     expect(config.layouts['daily']).not.toHaveProperty('profile');
     expect(config.layouts['daily']).not.toHaveProperty('serverLabels');

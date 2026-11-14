@@ -13,10 +13,10 @@ import { Logger } from './logger';
 import { ImageStore } from './images';
 import { loadPlugins, type LoadedPlugins } from './plugins';
 import { COMPAT_PROBE_SCRIPT, evaluateCompat, type CompatReport } from './inject';
-import { summarizeMetrics, type PerfSnapshot } from './perf';
+import { recommendations, sessionGrowth, stallStats, summarizeMetrics, type MediaStream, type PerfSnapshot } from './perf';
 import { activeTheme, applyThemeEdit, composeDiscordCss, referencedImages } from './compose';
 import * as T from './themeOps';
-import { resolvePerf, sanitizeConfig, sanitizeLayout, sanitizePerfOptions, type Config, type PerfProfile } from '../shared/config';
+import { resolvePerf, sanitizeConfig, sanitizeLayout, sanitizePerfOptions, toPerfProfile, type Config, type PerfProfile } from '../shared/config';
 import { validateTheme } from '../shared/theme';
 import { CHANNELS } from '../shared/ipc';
 import { routeKind } from '../preload/controller';
@@ -51,6 +51,60 @@ let startupMs: number | null = null;
 let notes: string[] = [];
 let compat: CompatReport | null = null;
 let gpuInfo: string | null = null;
+// Session memory history: one getAppMetrics() call per minute (a few microseconds), at most 24 h of points.
+const ramHistory: number[] = [];
+function startRamHistory() {
+  setInterval(() => {
+    ramHistory.push(summarizeMetrics(app.getAppMetrics() as any).ramMb);
+    if (ramHistory.length > 1440) ramHistory.shift();
+  }, 60_000).unref();
+}
+// Main-process stalls: how late a 250 ms timer fires (Windows timers add 0-16 ms of normal jitter). Runs only
+// while the Performance page is polling, over the last minute.
+let loopSamples: number[] = [];
+let loopTimer: NodeJS.Timeout | null = null;
+let loopIdle: NodeJS.Timeout | null = null;
+function eventLoopStats() {
+  if (!loopTimer) {
+    let last = performance.now();
+    loopTimer = setInterval(() => {
+      const now = performance.now();
+      loopSamples.push(Math.max(0, now - last - 250)); last = now;
+      if (loopSamples.length > 240) loopSamples.shift();
+    }, 250);
+    loopTimer.unref();
+  }
+  if (loopIdle) clearTimeout(loopIdle);
+  loopIdle = setTimeout(() => { if (loopTimer) clearInterval(loopTimer); loopTimer = null; loopSamples = []; }, 10_000);
+  loopIdle.unref();
+  return stallStats(loopSamples);
+}
+// Voice / stream statistics from the Discord page (only on request, see preload/mediastats.ts).
+let rtcSeq = 0;
+const rtcWaiting = new Map<number, (detail: string) => void>();
+function requestMedia(): Promise<PerfSnapshot['media']> {
+  const wc = discordWin?.webContents;
+  if (!wc || wc.isDestroyed()) return Promise.resolve(null);
+  const id = ++rtcSeq;
+  return new Promise((resolve) => {
+    const done = (detail: string | null) => { rtcWaiting.delete(id); resolve(detail === null ? null : parseMedia(detail)); };
+    const t = setTimeout(() => done(null), 2500);
+    rtcWaiting.set(id, (d) => { clearTimeout(t); done(d); });
+    wc.send('zero:rtc-req', id);
+  });
+}
+/** The page is untrusted input: keep known fields with the right types only. */
+function parseMedia(detail: string): PerfSnapshot['media'] {
+  let raw: any; try { raw = JSON.parse(detail); } catch { return null; }
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const t = (v: unknown) => (typeof v === 'string' ? v.slice(0, 80) : null);
+  const streams: MediaStream[] = (Array.isArray(raw?.streams) ? raw.streams : []).slice(0, 40).map((x: any) => ({
+    dir: x?.dir === 'send' ? 'send' : 'recv', kind: x?.kind === 'video' ? 'video' : 'audio', codec: t(x?.codec), kbps: n(x?.kbps),
+    width: n(x?.width), height: n(x?.height), fps: n(x?.fps), impl: t(x?.impl), hw: typeof x?.hw === 'boolean' ? x.hw : null, limit: t(x?.limit),
+    dropped: n(x?.dropped), freezes: n(x?.freezes), concealedPct: n(x?.concealedPct), jitterMs: n(x?.jitterMs), lost: n(x?.lost),
+  }));
+  return { connections: n(raw?.connections) ?? 0, streams };
+}
 let updater: ReturnType<typeof createUpdater> | null = null;
 let updateTimer: NodeJS.Timeout | undefined;
 
@@ -113,6 +167,11 @@ function recompileAndPush() {
 
 function applySpellcheck() {
   try { session.defaultSession.setSpellCheckerEnabled(resolvePerf(config).spellcheck); } catch (err) { log.warn('spellcheck toggle failed', err); }
+}
+/** Live: no reload, so a call or stream in progress is never interrupted. */
+function applyThrottle() {
+  const wc = discordWin?.webContents;
+  if (wc && !wc.isDestroyed()) wc.setBackgroundThrottling(resolvePerf(config).backgroundThrottle);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -385,6 +444,10 @@ function registerIpc() {
   // The ZERO button in Discord's user panel can only ask to open settings and to dismiss the one-time hint.
   ipcMain.on('zero:openSettings', (e) => { if (fromDiscord(e)) openSettings(); });
   // CrashHandler: Discord showed its crash screen. Reload, at most 3 times in 10 minutes.
+  ipcMain.on('zero:rtc', (e, id: unknown, detail: unknown) => {
+    if (!fromDiscord(e) || typeof id !== 'number' || typeof detail !== 'string') return;
+    rtcWaiting.get(id)?.(detail);
+  });
   ipcMain.on('zero:crash', (e) => {
     if (!fromDiscord(e) || !config.builtins.crashHandler?.enabled || config.recovery.safeMode) return;
     const now = Date.now();
@@ -475,26 +538,34 @@ function registerIpc() {
       try {
         const info: any = await app.getGPUInfo('basic'); const d = info?.gpuDevice?.find((x: any) => x.active) ?? info?.gpuDevice?.[0];
         const vendors: Record<number, string> = { 0x10de: 'NVIDIA', 0x1002: 'AMD', 0x8086: 'Intel' };
-        if (d) gpuInfo = `${vendors[d.vendorId] ?? 'vendor ' + d.vendorId}${d.deviceString ? ' ' + d.deviceString : ''} (device ${d.deviceId})`;
+        if (d) { const v = vendors[d.vendorId] ?? 'vendor ' + d.vendorId; const name = String(d.deviceString ?? ''); gpuInfo = name ? (name.startsWith(v) ? name : v + ' ' + name) : v + ' (device ' + d.deviceId + ')'; }
       } catch { /* optional */ }
     }
     const perf = resolvePerf(config);
+    let gpuFeatures: Record<string, string> = {};
+    try { gpuFeatures = Object.fromEntries(Object.entries(app.getGPUFeatureStatus()).filter(([k]) => ['gpu_compositing', 'rasterization', 'video_decode', 'video_encode', 'webgl'].includes(k))) as Record<string, string>; } catch { /* optional */ }
+    const media = await requestMedia();
+    const base = {
+      ramMb: m.ramMb, hardwareAcceleration: config.general.hardwareAcceleration, gpuFeatures, profile: config.performance.profile,
+      eventLoop: eventLoopStats(), media, session: { minutes: ramHistory.length, ramMb: ramHistory.slice(-240), growthMbPerHour: sessionGrowth(ramHistory) },
+    };
     return {
-      ...m, gpu: gpuInfo, startupMs, profile: config.performance.profile, at: Date.now(),
+      ...m, ...base, recommendations: recommendations(base), gpu: gpuInfo, startupMs, at: Date.now(),
       activeModules: ['core', config.recovery.safeMode ? 'theme-engine (safe mode: off)' : 'theme-engine', ...plugins.infos.filter((p) => p.status === 'enabled').map((p) => `plugin:${p.manifest.id}`)],
       background: [
         perf.backgroundThrottle ? 'Discord throttled while hidden/minimized' : 'Discord not throttled when hidden',
         perf.pauseWhenUnfocused ? 'CSS animations paused while unfocused' : 'animations run while unfocused',
         `${theme.pushes} theme update(s) pushed this session; stylesheet ${(theme.css.length / 1024).toFixed(1)} KB`,
-        'no polling: statistics are sampled only while this page is open',
+        'live statistics are sampled only while this page is open; memory history: one sample per minute',
       ],
     };
   });
   handle('perf:set', (p: { profile?: PerfProfile; custom?: unknown }) => {
-    const profile = p.profile && ['balanced', 'lightweight', 'custom'].includes(p.profile) ? p.profile : config.performance.profile;
+    const profile = toPerfProfile(p.profile, config.performance.profile);
     const custom = p.custom ? sanitizePerfOptions({ ...config.performance.custom, ...(p.custom as object) }) : config.performance.custom;
     commit({ ...config, performance: { profile, custom } });
     applySpellcheck();
+    applyThrottle();
   });
   handle('general:set', (g) => { commit(sanitizeConfig({ ...config, general: { ...config.general, ...(g && typeof g === 'object' ? g : {}) } })); scheduleUpdateChecks(); });
   handle('bg:import', async () => {
@@ -534,7 +605,9 @@ async function main() {
   let testName: string | null = null;
   try { const n = JSON.parse(readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')).zeroTestName; if (typeof n === 'string' && /^ZERO [\w ]{1,30}$/.test(n)) testName = n; } catch { /* default name */ }
   app.setName(testName ?? APP_NAME);
-  if (!app.requestSingleInstanceLock()) { app.quit(); return; }
+  // ZERO_DEV_SECOND_INSTANCE lets an unpackaged dev build run beside the installed app (for side-by-side benchmarks).
+  const devSecond = !app.isPackaged && process.env.ZERO_DEV_SECOND_INSTANCE === '1';
+  if (!devSecond && !app.requestSingleInstanceLock()) { app.quit(); return; }
   app.on('second-instance', (_e, argv) => {
     if (argv.includes('--safe-mode')) setSafeMode(true);
     if (discordWin) { discordWin.show(); discordWin.focus(); }
@@ -597,6 +670,7 @@ async function main() {
   registerIpc();
   if (config.general.minimizeToTray) createTray();
   createDiscordWindow();
+  startRamHistory();
   // update check: once, a little after startup, so it never competes with Discord loading
   games = createGameDetector({ dir: userData(), log, onChange: () => pushBuiltins(true) });
   pushBuiltins(true);

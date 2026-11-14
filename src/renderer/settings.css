@@ -211,6 +211,13 @@ canvas.spark { display: block; width: 100%; height: 64px; }
 .prof[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--brand); }
 .prof b { display: block; font-size: 15px; margin-bottom: 4px; }
 .prof span { font-size: 13px; color: var(--muted); }
+.profiles.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 760px) { .profiles.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.recs { display: grid; gap: 6px; margin-top: 10px; }
+.recs:empty { display: none; }
+.rec { padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 18px; background: var(--raise); box-shadow: inset 3px 0 0 var(--brand); }
+.rec.warn { background: rgba(240,178,50,.10); box-shadow: inset 3px 0 0 #f0b232; }
+.media { display: grid; gap: 6px; padding: 12px 14px; border-radius: 10px; background: var(--raise); }
 ul.plain { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
 
 /* ---- plugins / about ---- */

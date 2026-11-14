@@ -14,11 +14,22 @@ export interface LayoutProfile {
   timestampFormat: 'default' | 'hidden';
 }
 
-export type PerfProfile = 'balanced' | 'lightweight' | 'custom';
+/**
+ * balanced: everything the theme asks for. performance: no GPU-heavy effects (blur, transitions) but the look stays.
+ * lowResource: also drops background images and spellcheck, for low-end PCs or gaming + streaming on one GPU.
+ * None of them touches hardware acceleration (needed for hardware stream encoding) or reloads Discord.
+ */
+export type PerfProfile = 'balanced' | 'performance' | 'lowResource' | 'custom';
+export const PERF_PROFILES: readonly PerfProfile[] = ['balanced', 'performance', 'lowResource', 'custom'];
+/** Accepts current names and the pre-0.4 "lightweight" (same switches as performance). */
+export function toPerfProfile(v: unknown, fallback: PerfProfile = 'balanced'): PerfProfile {
+  if (v === 'lightweight') return 'performance';
+  return PERF_PROFILES.includes(v as PerfProfile) ? (v as PerfProfile) : fallback;
+}
 
 /** Every switch here has a real implementation (see resolvePerf and its call sites). */
 export interface PerfOptions extends RenderFlags {
-  /** Chromium may slow timers/rendering of the Discord page while the window is hidden or minimized (restart). */
+  /** Chromium may slow timers of the Discord page while it is hidden or minimized (applied live). */
   backgroundThrottle: boolean;
   /** Spellchecker dictionaries in the renderer (live). */
   spellcheck: boolean;
@@ -26,7 +37,8 @@ export interface PerfOptions extends RenderFlags {
 
 export const PERF_PRESETS: Record<Exclude<PerfProfile, 'custom'>, PerfOptions> = {
   balanced: { backgrounds: true, blur: true, animations: true, pauseWhenUnfocused: true, backgroundThrottle: true, spellcheck: true },
-  lightweight: { backgrounds: true, blur: false, animations: false, pauseWhenUnfocused: true, backgroundThrottle: true, spellcheck: false },
+  performance: { backgrounds: true, blur: false, animations: false, pauseWhenUnfocused: true, backgroundThrottle: true, spellcheck: true },
+  lowResource: { backgrounds: false, blur: false, animations: false, pauseWhenUnfocused: true, backgroundThrottle: true, spellcheck: false },
 };
 
 export interface Config {
@@ -153,7 +165,7 @@ export function sanitizeConfig(c: any): Config {
   }
   const layouts: Record<string, LayoutProfile> = { ...d.layouts };
   for (const [id, l] of Object.entries(c.layouts ?? {})) if (/^[a-z0-9-]{1,40}$/.test(id)) layouts[id] = sanitizeLayout(id, l);
-  const profile: PerfProfile = ['balanced', 'lightweight', 'custom'].includes(c.performance?.profile) ? c.performance.profile : 'balanced';
+  const profile = toPerfProfile(c.performance?.profile);
   return {
     version: CONFIG_VERSION,
     general: {

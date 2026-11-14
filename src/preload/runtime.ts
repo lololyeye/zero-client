@@ -126,15 +126,29 @@ export function zeroRuntime(): void {
   const domTasks = new Set<() => void>();
   let observer: MutationObserver | null = null;
   let pending = 0;
+  // While the window is hidden (minimized, or covered by a fullscreen game) nobody sees the DOM: the pass waits
+  // and runs once when it is shown again.
+  let deferred = false;
   function runDom(): void {
     pending = 0;
+    if (document.hidden) { deferred = true; return; }
     for (const t of domTasks) { try { t(); } catch { /* ignore */ } }
   }
-  function schedule(): void { if (!pending) pending = window.setTimeout(runDom, 250); }
+  function schedule(): void { if (!pending && !deferred) pending = window.setTimeout(runDom, 250); }
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden || !deferred) return;
+    deferred = false; schedule();
+  });
+  // Changes inside ZERO's own elements (the call timer ticking every second...) must not re-run every DOM task.
+  const OWN = '.zero-calltimer,.zero-pi,.zero-edit,.zero-menu,.zero-gat';
+  const own = (n: Node): boolean => !!(n.nodeType === 1 ? (n as Element) : n.parentElement)?.closest(OWN);
+  function onMutations(records: MutationRecord[]): void {
+    for (const r of records) if (!own(r.target)) { schedule(); return; }
+  }
   function addDom(task: () => void): void {
     domTasks.add(task);
     if (!observer) {
-      observer = new MutationObserver(schedule);
+      observer = new MutationObserver(onMutations);
       observer.observe(document.body ?? document.documentElement, { childList: true, subtree: true });
     }
     schedule();
@@ -171,6 +185,7 @@ export function zeroRuntime(): void {
     const tick = () => {
       const id = store('SelectedChannelStore')?.getVoiceChannelId?.() ?? null;
       if (id !== ch) { ch = id; since = Date.now(); }
+      if (document.hidden) return; // nothing to show; the next visible tick catches up
       let el = document.querySelector<HTMLElement>('.zero-calltimer');
       const status = document.querySelector('[class*="rtcConnectionStatus_"]');
       if (!ch || !status) { el?.remove(); return; }
@@ -180,15 +195,17 @@ export function zeroRuntime(): void {
         el = h('div', 'zero-calltimer');
         (host ?? status.parentElement)?.appendChild(el);
       }
-      el.textContent = text(Date.now() - since);
+      const t = text(Date.now() - since);
+      if (el.textContent !== t) el.textContent = t;
     };
     plugins.callTimer = {
       start(s) {
         fmt = s.format;
         setCss('callTimer', '.zero-calltimer{font-size:12px;line-height:16px;color:var(--text-muted,#949ba4);font-variant-numeric:tabular-nums;margin-top:2px}');
         tick(); timer = window.setInterval(tick, 1000);
+        document.addEventListener('visibilitychange', tick);
       },
-      stop() { clearInterval(timer); ch = null; document.querySelector('.zero-calltimer')?.remove(); setCss('callTimer', null); },
+      stop() { clearInterval(timer); document.removeEventListener('visibilitychange', tick); ch = null; document.querySelector('.zero-calltimer')?.remove(); setCss('callTimer', null); },
     };
   }
 

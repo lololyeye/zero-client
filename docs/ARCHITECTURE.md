@@ -88,7 +88,9 @@ Attribution (after): Discord's renderer ≈ 188 MB of the 277 MB, GPU ≈ 41 MB,
 
 What changed: no `executeJavaScript`, one stylesheet written only on change, observer limited to `<head>` children, cached GPU info, sampling only while the Performance page is visible, backups throttled. Occlusion tracking is re-enabled (the old workaround for the preview is gone, because the preview no longer depends on Discord's window).
 
-Profiles: **Balanced** (everything on), **Lightweight** (no blur, no animations, spellcheck off; colors and backgrounds kept), **Custom** (each switch: backgrounds, blur, animations, pause when unfocused, background throttling, spellcheck). Every switch has a real implementation; background throttling applies after a restart.
+Profiles (0.4): **Balanced** (everything the theme asks for), **Performance** (no blur, no transitions; colors and backgrounds kept), **Low Resource** (also no background images, no spellcheck), **Custom** (each switch: backgrounds, blur, animations, pause when unfocused, background throttling, spellcheck). Every switch has a real implementation and applies live (stylesheet, `session.setSpellCheckerEnabled`, `webContents.setBackgroundThrottling`): Discord is never reloaded, so a call or stream is never cut. No profile turns off hardware acceleration: on Windows it is what gives screen sharing its hardware H.264 encoder. The old Lightweight profile maps to Performance.
+
+The 0.4 performance audit (method, measurements, what changed and what is outside ZERO's control) is in [PERFORMANCE.md](PERFORMANCE.md).
 
 ## Reliability
 
