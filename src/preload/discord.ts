@@ -1,4 +1,4 @@
-import { ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer } from 'electron';
 import { createThemeController, type ApplyPayload } from './controller';
 import { createLauncher } from './launcher';
 
@@ -8,6 +8,27 @@ import { createLauncher } from './launcher';
  * It receives stylesheet updates from ZERO's main process, manages its own <style> element, and adds the
  * ZERO button to the user panel.
  */
+// Screen share with sound: ask Chromium to leave this page's own audio (the voice call) out of the captured
+// system audio, so viewers don't hear the call echoed through the stream. This is the only thing ZERO runs in
+// Discord's page world: it adds one standard constraint to getDisplayMedia and exposes nothing.
+try {
+  contextBridge.executeInMainWorld({
+    func: () => {
+      const proto = MediaDevices.prototype;
+      const original = proto.getDisplayMedia;
+      if (typeof original !== 'function') return;
+      Object.defineProperty(proto, 'getDisplayMedia', {
+        configurable: true, writable: true,
+        value: function getDisplayMedia(this: MediaDevices, constraints?: DisplayMediaStreamOptions) {
+          const c: any = constraints && typeof constraints === 'object' ? { ...constraints } : {};
+          if (c.audio) { c.audio = { ...(typeof c.audio === 'object' ? c.audio : {}), restrictOwnAudio: true }; c.systemAudio ??= 'include'; }
+          return original.call(this, c);
+        },
+      });
+    },
+  });
+} catch { /* older runtime: sharing still works, without the echo filter */ }
+
 const controller = createThemeController(document);
 const launcher = createLauncher(document, {
   open: () => ipcRenderer.send('zero:openSettings'),

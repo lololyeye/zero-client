@@ -1,7 +1,8 @@
 import {
-  app, BrowserWindow, WebContentsView, ipcMain, shell, session, protocol, Tray, Menu, nativeImage, dialog, desktopCapturer, net,
+  app, BrowserWindow, WebContentsView, ipcMain, shell, session, protocol, Tray, Menu, nativeImage, dialog, net,
   type WebContents,
 } from 'electron';
+import { chromeUserAgent, createPicker } from './capture';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promises as fs } from 'node:fs';
@@ -157,14 +158,23 @@ function isDiscordUrl(url: string): boolean {
 function hardenSession(ses: Electron.Session) {
   ses.setPermissionRequestHandler((wc, permission, cb) => cb(ALLOWED_PERMS.has(permission) && isDiscordUrl(wc.getURL())));
   ses.setPermissionCheckHandler((wc, permission) => ALLOWED_PERMS.has(permission) && (!wc || isDiscordUrl(wc.getURL())));
-  // Screen share: grants the primary screen with system audio loopback. A source picker is on the roadmap.
-  ses.setDisplayMediaRequestHandler(async (_req, cb) => {
+  // Screen share (Go Live): the user picks a screen or window in ZERO's picker. "Share sound" captures system audio
+  // (Windows loopback); the Discord preload asks Chromium for restrictOwnAudio, so the call itself is not re-sent.
+  ses.setDisplayMediaRequestHandler(async (req, cb) => {
+    // Answer exactly once. Denying (empty streams) makes Electron throw after it has already rejected the request.
+    let answered = false;
+    const reply = (streams: Electron.Streams) => {
+      if (answered) return;
+      answered = true;
+      try { cb(streams); } catch { /* denial acknowledged: the page gets AbortError */ }
+    };
     try {
-      const sources = await desktopCapturer.getSources({ types: ['screen', 'window'] });
-      const screen = sources.find((s) => s.id.startsWith('screen:')) ?? sources[0];
-      if (!screen) return cb({});
-      cb({ video: screen, audio: 'loopback' });
-    } catch (err) { log.warn('display media failed', err); cb({}); }
+      if (!req.frame || !isDiscordUrl(req.frame.url)) return reply({});
+      log.info(`screen share requested (audio: ${req.audioRequested})`);
+      const choice = await picker.pick(req.audioRequested);
+      if (!choice) return reply({});
+      reply(choice.audio ? { video: { id: choice.id, name: choice.name }, audio: 'loopback' } : { video: { id: choice.id, name: choice.name } });
+    } catch (err) { log.warn('display media failed', err); reply({}); }
   });
 }
 
@@ -185,6 +195,13 @@ function updateRoute(url: string) {
   theme.route = kind;
   discordWin?.webContents.send('zero:route', kind);
 }
+
+const picker = createPicker({
+  window: () => discordWin,
+  preload: path.join(__dirname, '..', 'preload', 'picker.js'),
+  page: path.join(rendererDir(), 'picker.html'),
+  guard: (wc) => guardNavigation(wc),
+});
 
 function createDiscordWindow() {
   const perf = resolvePerf(config);
@@ -218,8 +235,8 @@ function createDiscordWindow() {
   win.on('close', (e) => {
     if (!quitting && config.general.minimizeToTray && tray) { e.preventDefault(); win.hide(); }
   });
-  win.on('resize', fitSettings);
-  win.on('closed', () => { discordWin = null; settingsView = null; });
+  win.on('resize', () => { fitSettings(); picker.fit(); });
+  win.on('closed', () => { picker.cancel(); discordWin = null; settingsView = null; });
   void win.loadURL(BRANCH_URL[config.general.discordBranch]);
 }
 
@@ -469,6 +486,8 @@ async function main() {
   });
 
   if (!config.general.hardwareAcceleration) app.disableHardwareAcceleration();
+  // Present as the Chromium ZERO runs on, so Discord enables Go Live and stream watching (see capture.ts).
+  app.userAgentFallback = chromeUserAgent(process.versions.chrome);
   await app.whenReady();
   protocol.handle('zero-asset', async (req) => {
     const u = new URL(req.url);

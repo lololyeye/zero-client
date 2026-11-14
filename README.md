@@ -29,6 +29,7 @@ Custom themes and backgrounds that actually apply everywhere, with no restart ne
 - **Safe Mode:** `Ctrl+Shift+Z` removes every customization instantly. ZERO also turns it on by itself after repeated failed starts.
 - **Backups:** settings are saved atomically with rolling backups, and a corrupted file is restored from the latest backup.
 - **Plugins:** CSS-only plugins with explicit permissions.
+- **Streaming:** Go Live and watching streams work in ZERO. Pick a screen or an app window, and turn on **Share sound** to stream your PC's audio. Your voice call is left out of the stream, so viewers don't hear an echo.
 
 Shortcuts: `Ctrl+,` opens or closes ZERO settings, `Esc` closes them, `Ctrl+F` searches them, `Ctrl+Shift+Z` toggles Safe Mode.
 

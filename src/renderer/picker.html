@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; img-src data:; script-src 'self'" />
+<title>Share your screen</title>
+<link rel="stylesheet" href="picker.css" />
+</head>
+<body>
+<div class="backdrop" id="backdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="title">
+    <header>
+      <h2 id="title">Share your screen</h2>
+      <button class="x" id="x" aria-label="Cancel"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M17.3 5.3a1 1 0 1 1 1.4 1.4L13.42 12l5.3 5.3a1 1 0 0 1-1.42 1.4L12 13.42l-5.3 5.3a1 1 0 0 1-1.4-1.42L10.58 12l-5.3-5.3a1 1 0 0 1 1.42-1.4L12 10.58l5.3-5.3Z"/></svg></button>
+    </header>
+    <div class="seg" role="tablist">
+      <button role="tab" data-kind="screen" aria-selected="true">Screens</button>
+      <button role="tab" data-kind="window" aria-selected="false">Applications</button>
+    </div>
+    <div class="grid" id="grid" role="listbox" aria-label="Sources"><div class="note">Loading…</div></div>
+    <footer>
+      <label class="audio" id="audio-row" hidden>
+        <span class="switch"><input type="checkbox" id="audio" checked /><i></i></span>
+        <span class="txt"><b>Share sound</b><small>Sound from your PC. Your call is left out.</small></span>
+      </label>
+      <div class="btns">
+        <button class="btn ghost" id="cancel">Cancel</button>
+        <button class="btn primary" id="go" disabled>Share</button>
+      </div>
+    </footer>
+  </div>
+</div>
+<script src="picker.js"></script>
+</body>
+</html>
