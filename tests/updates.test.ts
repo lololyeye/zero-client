@@ -1,25 +1,56 @@
 import { describe, expect, it } from 'vitest';
-import { compareVersions, fetchLatest, parseRelease } from '../src/main/updates';
+import { compareVersions, etaSeconds, friendlyError, isNetworkError, notesToLines, resolvePending, shouldPrompt } from '../src/main/updates';
 
-describe('update check', () => {
-  it('compares versions numerically, including v-prefixes and pre-releases', () => {
+describe('compareVersions', () => {
+  it('orders dotted versions and pre-releases', () => {
     expect(compareVersions('0.10.0', '0.9.9')).toBe(1);
-    expect(compareVersions('v0.2.0', '0.2.0')).toBe(0);
-    expect(compareVersions('0.2.0', '0.2.1')).toBe(-1);
-    expect(compareVersions('1.0.0-beta.1', '1.0.0')).toBe(-1);
-    expect(compareVersions('1.0', '1.0.0')).toBe(0);
+    expect(compareVersions('v0.2.2', '0.2.2')).toBe(0);
+    expect(compareVersions('0.3.0-beta.1', '0.3.0')).toBe(-1);
+    expect(compareVersions('0.2.1', '0.2.2')).toBe(-1);
   });
-  it('reads the installer asset and ignores drafts, pre-releases and non-GitHub links', () => {
-    const rel = { tag_name: 'v0.3.0', html_url: 'https://github.com/lololyeye/zero-client/releases/tag/v0.3.0', body: 'notes', assets: [{ name: 'ZERO-Setup-0.3.0.exe', browser_download_url: 'https://github.com/lololyeye/zero-client/releases/download/v0.3.0/ZERO-Setup-0.3.0.exe' }] };
-    const u = parseRelease(rel, '0.2.0')!;
-    expect(u.newer).toBe(true); expect(u.latest).toBe('0.3.0'); expect(u.installerUrl).toMatch(/\.exe$/);
-    expect(parseRelease({ ...rel, draft: true }, '0.2.0')).toBeNull();
-    expect(parseRelease({ ...rel, prerelease: true }, '0.2.0')).toBeNull();
-    expect(parseRelease({ ...rel, html_url: 'https://evil.example/x', assets: [{ name: 'a.exe', browser_download_url: 'https://evil.example/a.exe' }] }, '0.2.0')!.installerUrl).toBeNull();
-    expect(parseRelease(rel, '0.3.0')!.newer).toBe(false);
+});
+
+describe('notesToLines', () => {
+  it('turns GitHub HTML notes into plain lines, never markup', () => {
+    const html = '<p><strong>Streaming works.</strong></p><ul><li>Go Live &amp; watching</li><li><a href="x">Picker</a> <img src=x onerror=alert(1)></li></ul><p>Download <strong>ZERO-Setup-0.2.2.exe</strong> below.</p>';
+    expect(notesToLines(html)).toEqual(['Streaming works.', 'Go Live & watching', 'Picker']);
   });
-  it('treats "no release yet" as no update and surfaces other errors', async () => {
-    expect(await fetchLatest(async () => new Response('', { status: 404 }), '0.2.0')).toBeNull();
-    await expect(fetchLatest(async () => new Response('', { status: 500 }), '0.2.0')).rejects.toThrow(/500/);
+  it('handles markdown, note arrays, empty input and long lines', () => {
+    expect(notesToLines('## Fixes\n- **Faster** start\n* [Docs](https://x)')).toEqual(['Fixes', 'Faster start', 'Docs']);
+    expect(notesToLines([{ version: '1', note: 'One' }, { version: '2', note: 'Two' }])).toEqual(['One', 'Two']);
+    expect(notesToLines(null)).toEqual([]);
+    expect(notesToLines('x'.repeat(300))[0]!.length).toBe(158);
+    expect(notesToLines(Array.from({ length: 20 }, (_, i) => `- ${i}`).join('\n'))).toHaveLength(8);
+  });
+});
+
+describe('progress and errors', () => {
+  it('computes time left from real speed only', () => {
+    expect(etaSeconds(50, 150, 10)).toBe(10);
+    expect(etaSeconds(50, 150, 0)).toBeNull();
+    expect(etaSeconds(0, 0, 10)).toBeNull();
+  });
+  it('retries network failures, not checksum failures', () => {
+    expect(isNetworkError('net::ERR_CONNECTION_RESET')).toBe(true);
+    expect(isNetworkError('socket hang up')).toBe(true);
+    expect(isNetworkError('sha512 checksum mismatch, expected abc, got def')).toBe(false);
+    expect(friendlyError('sha512 checksum mismatch')).toMatch(/discarded. Nothing was installed/);
+    expect(friendlyError('ECONNRESET')).toMatch(/connection was lost/);
+  });
+});
+
+describe('prompting and post-update verification', () => {
+  const now = 1_000_000;
+  it('respects "Remind me later" for that version only, until it expires', () => {
+    expect(shouldPrompt('0.3.0', '0.2.2', null, now)).toBe(true);
+    expect(shouldPrompt('0.3.0', '0.2.2', { version: '0.3.0', until: now + 1 }, now)).toBe(false);
+    expect(shouldPrompt('0.3.1', '0.2.2', { version: '0.3.0', until: now + 1 }, now)).toBe(true);
+    expect(shouldPrompt('0.3.0', '0.2.2', { version: '0.3.0', until: now - 1 }, now)).toBe(true);
+    expect(shouldPrompt('0.2.2', '0.2.2', null, now)).toBe(false);
+  });
+  it('reports whether the update the previous run started took effect', () => {
+    expect(resolvePending({ target: '0.3.0' }, '0.3.0')).toEqual({ justUpdated: '0.3.0', failedTo: null });
+    expect(resolvePending({ target: '0.3.0' }, '0.2.2')).toEqual({ justUpdated: null, failedTo: '0.3.0' });
+    expect(resolvePending(null, '0.2.2')).toEqual({ justUpdated: null, failedTo: null });
   });
 });

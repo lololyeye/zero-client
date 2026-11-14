@@ -12,6 +12,10 @@ await build({ ...common, entryPoints: ['src/preload/discord.ts'], outfile: 'dist
 await build({ ...common, entryPoints: ['src/renderer/settings.ts'], outfile: 'dist/renderer/settings.js', platform: 'browser', format: 'iife' });
 await build({ ...common, entryPoints: ['src/preload/picker.ts'], outfile: 'dist/preload/picker.js', platform: 'node', format: 'cjs', external: ['electron'] });
 await build({ ...common, entryPoints: ['src/renderer/picker.ts'], outfile: 'dist/renderer/picker.js', platform: 'browser', format: 'iife' });
+await build({ ...common, entryPoints: ['src/preload/update.ts'], outfile: 'dist/preload/update.js', platform: 'node', format: 'cjs', external: ['electron'] });
+await build({ ...common, entryPoints: ['src/renderer/update.ts'], outfile: 'dist/renderer/update.js', platform: 'browser', format: 'iife' });
+await cp('src/renderer/update.html', 'dist/renderer/update.html');
+await cp('src/renderer/update.css', 'dist/renderer/update.css');
 await cp('src/renderer/picker.html', 'dist/renderer/picker.html');
 await cp('src/renderer/picker.css', 'dist/renderer/picker.css');
 await cp('src/renderer/settings.html', 'dist/renderer/settings.html');

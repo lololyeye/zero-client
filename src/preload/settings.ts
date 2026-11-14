@@ -7,6 +7,11 @@ contextBridge.exposeInMainWorld('zero', {
     if (!CHANNELS.includes(channel)) return Promise.reject(new Error('Blocked channel'));
     return ipcRenderer.invoke(channel, ...args);
   },
+  onUpdate: (cb: (s: unknown) => void) => {
+    const h = (_e: unknown, s: unknown) => cb(s);
+    ipcRenderer.on('update:state', h);
+    return () => ipcRenderer.removeListener('update:state', h);
+  },
   onState: (cb: (s: unknown) => void) => {
     const h = (_e: unknown, s: unknown) => cb(s);
     ipcRenderer.on('state:changed', h);

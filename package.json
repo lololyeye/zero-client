@@ -23,7 +23,8 @@
     "esbuild": "^0.24.0",
     "oxlint": "^0.13.0",
     "typescript": "^5.7.0",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "electron-updater": "^6.8.11"
   },
   "build": {
     "appId": "app.zero.client",
@@ -51,6 +52,11 @@
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "artifactName": "ZERO-Setup-${version}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "lololyeye",
+      "repo": "zero-client"
     }
   },
   "author": "lololyeye",

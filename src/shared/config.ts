@@ -30,7 +30,7 @@ export const PERF_PRESETS: Record<Exclude<PerfProfile, 'custom'>, PerfOptions> =
 
 export interface Config {
   version: number;
-  general: { minimizeToTray: boolean; startMinimized: boolean; hardwareAcceleration: boolean; discordBranch: 'stable' | 'ptb' | 'canary'; checkUpdates: boolean; introSeen: boolean };
+  general: { minimizeToTray: boolean; startMinimized: boolean; hardwareAcceleration: boolean; discordBranch: 'stable' | 'ptb' | 'canary'; checkUpdates: boolean; updateIntervalHours: 0 | 1 | 6 | 24; introSeen: boolean };
   activeThemeId: string;
   themes: Record<string, Theme>;
   activeLayoutId: string;
@@ -60,7 +60,7 @@ export const DEFAULT_LAYOUTS: LayoutProfile[] = [
 export function defaultConfig(): Config {
   return {
     version: CONFIG_VERSION,
-    general: { minimizeToTray: false, startMinimized: false, hardwareAcceleration: true, discordBranch: 'stable', checkUpdates: true, introSeen: false },
+    general: { minimizeToTray: false, startMinimized: false, hardwareAcceleration: true, discordBranch: 'stable', checkUpdates: true, updateIntervalHours: 6, introSeen: false },
     activeThemeId: DEFAULT_THEME.id,
     themes: Object.fromEntries(PRESETS.map((t) => [t.id, t])),
     activeLayoutId: 'daily',
@@ -158,6 +158,7 @@ export function sanitizeConfig(c: any): Config {
       hardwareAcceleration: bool(c.general?.hardwareAcceleration, true),
       discordBranch: ['stable', 'ptb', 'canary'].includes(c.general?.discordBranch) ? c.general.discordBranch : 'stable',
       checkUpdates: bool(c.general?.checkUpdates, true),
+      updateIntervalHours: [0, 1, 6, 24].includes(c.general?.updateIntervalHours) ? c.general.updateIntervalHours : 6,
       introSeen: bool(c.general?.introSeen, false),
     },
     themes,

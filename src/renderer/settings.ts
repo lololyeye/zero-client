@@ -7,13 +7,14 @@ import { PERMISSIONS, type PluginInfo } from '../shared/plugin';
 import type { Channel } from '../shared/ipc';
 import type { PerfSnapshot } from '../main/perf';
 import type { CompatReport } from '../main/inject';
+import type { UpdateState } from '../main/updates';
 
 interface AppState {
   config: Config; plugins: PluginInfo[]; notes: string[]; compat: CompatReport | null; startupMs: number | null;
   safeMode: boolean; version: string; electron: string; chrome: string; pluginsDir: string; perf: PerfOptions; missingImages: string[];
-  update: { current: string; latest: string; newer: boolean; url: string; installerUrl: string | null; notes: string } | null;
+  update: UpdateState | null;
 }
-declare global { interface Window { zero: { invoke(c: Channel, ...a: unknown[]): Promise<{ ok: boolean; data?: any; error?: string }>; onState(cb: (s: AppState) => void): () => void } } }
+declare global { interface Window { zero: { invoke(c: Channel, ...a: unknown[]): Promise<{ ok: boolean; data?: any; error?: string }>; onState(cb: (s: AppState) => void): () => void; onUpdate(cb: (s: UpdateState) => void): () => void } } }
 
 let state: AppState;
 /** Working copy of the ACTIVE theme. Every edit is sent to main, which validates, applies to Discord and persists. */
@@ -574,7 +575,8 @@ sect('general', 'General', 'Client', 'tray minimize startup hardware acceleratio
       row('Start minimized', 'Open without showing the window.', toggle(g.startMinimized, (v) => set({ startMinimized: v }), 'Start minimized')),
       row('Hardware acceleration', 'Uses the GPU for rendering, video and screen share. Turn off only if you see glitches. Applies after restart.', toggle(g.hardwareAcceleration, (v) => set({ hardwareAcceleration: v }), 'Hardware acceleration')),
       row('Discord version', 'Which Discord web release to load. Applies after restart.', seg(g.discordBranch, [['stable', 'Stable'], ['ptb', 'PTB'], ['canary', 'Canary']], (v) => void set({ discordBranch: v }))),
-      row('Check for updates', 'Asks GitHub once at startup whether a newer ZERO exists. Nothing about you is sent.', toggle(g.checkUpdates, (v) => set({ checkUpdates: v }), 'Check for updates')),
+      row('Check for updates', 'Asks GitHub whether a newer ZERO exists. Nothing about you is sent.', toggle(g.checkUpdates, (v) => set({ checkUpdates: v }), 'Check for updates')),
+      g.checkUpdates ? row('Check again while open', 'Besides the check at startup.', seg(String(g.updateIntervalHours), [['0', 'Never'], ['1', 'Every hour'], ['6', 'Every 6 h'], ['24', 'Daily']], (v) => void set({ updateIntervalHours: Number(v) as Config['general']['updateIntervalHours'] }))) : null,
       row('Reload Discord', 'Reloads the Discord page. You stay signed in.', btn('Reload', () => call('discord:reload'), 'sm'))));
 });
 
@@ -646,14 +648,39 @@ sect('about', 'About', '', 'version electron license update', () => {
       h('div', { class: 'logo' }, document.querySelector('.brand svg')!.cloneNode(true)),
       h('div', {}, h('b', {}, 'ZERO'), h('span', {}, `Version ${state.version}`))),
     rows(
-      row('Updates', !u ? 'Not checked yet.' : u.newer ? `Version ${u.latest} is available.` : 'You have the latest version.',
-        h('span', { style: 'display:flex;gap:8px' },
-          btn('Check now', async () => { const r = await call('update:check'); if (r) render(); }, 'sm'),
-          u?.newer ? btn(`Download ${u.latest}`, () => call('update:open'), 'primary sm') : null)),
+      updateCard(u),
       row('Electron / Chromium', `${state.electron} / ${state.chrome}`, null),
       row('Plugins folder', state.pluginsDir, null)),
     h('p', { class: 'muted small', style: 'margin-top:16px' }, 'ZERO loads Discord’s official web app. It never reads, stores or sends your login token or password, and it does not automate your account. Not affiliated with Discord Inc.'));
 });
+
+/** Settings > About update row. Progress events patch it in place (see boot), the page is not rebuilt. */
+function updateCard(u: UpdateState | null): HTMLElement {
+  const mb = (b: number) => (b / 1048576).toFixed(1) + ' MB';
+  const p = u?.progress;
+  const working = u && (u.phase === 'downloading' || u.phase === 'verifying' || u.phase === 'installing');
+  const text = !u || u.phase === 'idle' ? 'Not checked yet.'
+    : u.phase === 'unsupported' ? 'In-app updates work in the installed app (not in a development run).'
+      : u.phase === 'checking' ? 'Checking for updates…'
+        : u.phase === 'latest' ? `You're up to date (${u.current}).${u.checkedAt ? ' Checked at ' + new Date(u.checkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '.' : ''}`
+          : u.phase === 'available' ? `Version ${u.latest} is available. It installs in place and ZERO restarts by itself.`
+            : u.phase === 'downloading' ? (u.notice ?? `Downloading ${u.latest}: ${Math.floor(p?.percent ?? 0)}%${p?.total ? ` · ${mb(p.transferred)} of ${mb(p.total)}` : ''}`)
+              : u.phase === 'verifying' ? 'Verifying files…'
+                : u.phase === 'installing' ? 'Installing. ZERO will restart in a moment.'
+                  : (u.error ?? 'The update failed.');
+  const ctl = !u || u.phase === 'unsupported' ? null
+    : u.phase === 'available' ? h('span', { style: 'display:flex;gap:8px' }, btn('Check again', () => call('update:check'), 'ghost sm'), btn('Update now', () => call('update:open'), 'primary sm'))
+      : u.phase === 'error' ? btn('Retry', () => call(u.latest ? 'update:open' : 'update:check'), 'primary sm')
+        : working ? btn('Show', () => call('update:open'), 'ghost sm')
+          : btn('Check now', () => call('update:check'), 'sm', { disabled: u.phase === 'checking' });
+  const pct = u?.phase === 'downloading' ? (p?.percent ?? 0) : 100;
+  return h('div', { class: 'row', id: 'upd-card' },
+    h('div', { class: 'txt' },
+      h('div', { class: 't' }, 'Updates', u?.phase === 'latest' ? h('span', { class: 'pill ok', style: 'margin-left:8px' }, 'Up to date') : u?.phase === 'available' ? h('span', { class: 'pill warn', style: 'margin-left:8px' }, 'New version') : null),
+      h('div', { class: 'd' + (u?.phase === 'error' ? ' err-text' : '') }, text),
+      working ? h('div', { class: 'upd-bar' }, h('i', { style: { width: pct + '%' } })) : null),
+    ctl ? h('div', { class: 'c' }, ctl) : null);
+}
 
 // ---- shell ----
 const match = (s: Section, q: string) => !q || (s.title + ' ' + s.group + ' ' + s.terms).toLowerCase().includes(q);
@@ -764,6 +791,11 @@ async function boot() {
       if (t && (t.id !== draft.id || JSON.stringify(t) !== JSON.stringify(draft))) { draft = structuredClone(t); changed = true; }
     }
     if (changed) renderSoon();
+  });
+  window.zero.onUpdate((u) => {
+    state.update = u;
+    const card = document.getElementById('upd-card');
+    if (card) card.replaceWith(updateCard(u));
   });
   const search = $('#search') as HTMLInputElement;
   search.addEventListener('input', () => {

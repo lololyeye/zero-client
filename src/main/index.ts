@@ -5,7 +5,7 @@ import {
 import { chromeUserAgent, createPicker } from './capture';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { promises as fs } from 'node:fs';
+import { promises as fs, readFileSync } from 'node:fs';
 
 const bootStart = performance.now();
 import { ConfigStore } from './store';
@@ -20,7 +20,9 @@ import { resolvePerf, sanitizeConfig, sanitizeLayout, sanitizePerfOptions, type 
 import { validateTheme } from '../shared/theme';
 import { CHANNELS } from '../shared/ipc';
 import { routeKind } from '../preload/controller';
-import { fetchLatest, RELEASES_PAGE, type UpdateInfo } from './updates';
+import type { UpdateState } from './updates';
+import { createUpdater } from './updater';
+import { createOverlay } from './overlay';
 
 const APP_NAME = 'ZERO';
 const BRANCH_URL = { stable: 'https://discord.com/app', ptb: 'https://ptb.discord.com/app', canary: 'https://canary.discord.com/app' } as const;
@@ -47,7 +49,8 @@ let startupMs: number | null = null;
 let notes: string[] = [];
 let compat: CompatReport | null = null;
 let gpuInfo: string | null = null;
-let update: UpdateInfo | null = null;
+let updater: ReturnType<typeof createUpdater> | null = null;
+let updateTimer: NodeJS.Timeout | undefined;
 
 const userData = () => app.getPath('userData');
 const rendererDir = () => path.join(__dirname, '..', 'renderer');
@@ -125,7 +128,7 @@ function publicState() {
   return {
     config, plugins: plugins.infos, notes, compat, startupMs, safeMode: config.recovery.safeMode,
     version: app.getVersion(), electron: process.versions.electron, chrome: process.versions.chrome,
-    pluginsDir: path.join(userData(), 'plugins'), perf, missingImages: [...theme.missing], update,
+    pluginsDir: path.join(userData(), 'plugins'), perf, missingImages: [...theme.missing], update: updater?.state ?? null,
   };
 }
 function broadcast() { if (settingsView && !settingsView.webContents.isDestroyed()) settingsView.webContents.send('state:changed', publicState()); }
@@ -235,31 +238,39 @@ function createDiscordWindow() {
   win.on('close', (e) => {
     if (!quitting && config.general.minimizeToTray && tray) { e.preventDefault(); win.hide(); }
   });
-  win.on('resize', () => { fitSettings(); picker.fit(); });
+  win.on('resize', () => { fitSettings(); picker.fit(); updateLayer.fit(); });
   win.on('closed', () => { picker.cancel(); discordWin = null; settingsView = null; });
   void win.loadURL(BRANCH_URL[config.general.discordBranch]);
 }
 
-/** One request to GitHub; if a newer release exists, tell the user and let them download it. */
-async function checkForUpdates(interactive: boolean): Promise<UpdateInfo | null> {
-  try {
-    update = await fetchLatest((u, i) => net.fetch(u, i), app.getVersion());
-  } catch (err) {
-    log.warn('update check failed', err);
-    if (interactive) throw new Error('Could not reach GitHub to check for updates.');
-    return null;
-  }
-  broadcast();
-  if (update?.newer && !interactive && discordWin && !discordWin.isDestroyed()) {
-    const r = await dialog.showMessageBox(discordWin, {
-      type: 'info', title: 'ZERO update', buttons: ['Download update', 'Later'], defaultId: 0, cancelId: 1,
-      message: `ZERO ${update.latest} is available`,
-      detail: `You are using ${update.current}. Download and run the new installer; your settings, themes and backgrounds are kept.` +
-        (update.notes ? `\n\n${update.notes.slice(0, 600)}` : ''),
-    });
-    if (r.response === 0) void shell.openExternal(update.installerUrl ?? update.url);
-  }
-  return update;
+/** Update screen: a layer in the Discord window, like settings. Never a browser page or a separate window. */
+const updateLayer = createOverlay({
+  window: () => discordWin,
+  preload: path.join(__dirname, '..', 'preload', 'update.js'),
+  page: path.join(rendererDir(), 'update.html'),
+  guard: (wc) => guardNavigation(wc),
+});
+
+function onUpdateState(s: UpdateState) {
+  updateLayer.webContents?.send('updater:state', s);
+  settingsView?.webContents.send('update:state', s); // live progress in Settings > About, without a page rebuild
+  if (s.phase !== 'downloading' && s.phase !== 'verifying') broadcast();
+}
+
+/** Periodic checks while ZERO stays open (Settings > General). 0 = only at startup. */
+function scheduleUpdateChecks() {
+  clearInterval(updateTimer);
+  const hours = config.general.updateIntervalHours;
+  if (!updater || !app.isPackaged || !config.general.checkUpdates || !hours) return;
+  updateTimer = setInterval(() => void updater?.check(false), hours * 3600_000);
+  updateTimer.unref();
+}
+
+function startUpdate() {
+  if (!updater) return;
+  if (updater.state.latest && (updater.state.phase === 'available' || updater.state.phase === 'error')) void updater.install();
+  else void updater.check(true);
+  updateLayer.open();
 }
 
 function fitSettings() {
@@ -344,8 +355,22 @@ function registerIpc() {
 
   handle('state:get', () => publicState());
   handle('settings:close', () => { setImmediate(closeSettings); });
-  handle('update:check', () => checkForUpdates(true));
-  handle('update:open', () => { void shell.openExternal(update?.installerUrl ?? update?.url ?? RELEASES_PAGE); });
+  handle('update:check', async () => (updater ? updater.check(true) : null));
+  handle('update:open', () => { startUpdate(); });
+  // The update screen can only read the updater state and send one of five actions.
+  ipcMain.handle('updater:get', (e) => {
+    if (!updateLayer.webContents || e.sender !== updateLayer.webContents) throw new Error('Unauthorized sender');
+    return updater?.state ?? null;
+  });
+  ipcMain.on('updater:act', (e, action: unknown) => {
+    if (!updater || !updateLayer.webContents || e.sender !== updateLayer.webContents) return;
+    if (action === 'install') void updater.install();
+    else if (action === 'retry') {
+      if (updater.state.failedTo || !updater.state.latest) { updater.acknowledge(); void updater.check(true); } else void updater.install();
+    } else if (action === 'later') { void updater.remindLater(); updateLayer.close(); }
+    else if (action === 'hide') updateLayer.close();
+    else if (action === 'done') { updater.acknowledge(); updateLayer.close(); }
+  });
   // Live edit: validate -> commit (Discord updates immediately) -> persist (debounced). Invalid input keeps
   // the previous working theme because validateTheme throws before anything is changed.
   handle('theme:update', (t) => {
@@ -418,7 +443,7 @@ function registerIpc() {
     commit({ ...config, performance: { profile, custom } });
     applySpellcheck();
   });
-  handle('general:set', (g) => commit(sanitizeConfig({ ...config, general: { ...config.general, ...(g && typeof g === 'object' ? g : {}) } })));
+  handle('general:set', (g) => { commit(sanitizeConfig({ ...config, general: { ...config.general, ...(g && typeof g === 'object' ? g : {}) } })); scheduleUpdateChecks(); });
   handle('bg:import', async () => {
     const r = await dialog.showOpenDialog(discordWin!, { title: 'Choose a background image', filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }], properties: ['openFile'] });
     if (r.canceled || !r.filePaths[0]) return null;
@@ -444,7 +469,10 @@ function registerIpc() {
 
 // ------------------------------------------------------------------------------------------------
 async function main() {
-  app.setName(APP_NAME);
+  // Isolated builds for the update lifecycle test set "zeroTestName" (separate profile); real builds never do.
+  let testName: string | null = null;
+  try { const n = JSON.parse(readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')).zeroTestName; if (typeof n === 'string' && /^ZERO [\w ]{1,30}$/.test(n)) testName = n; } catch { /* default name */ }
+  app.setName(testName ?? APP_NAME);
   if (!app.requestSingleInstanceLock()) { app.quit(); return; }
   app.on('second-instance', (_e, argv) => {
     if (argv.includes('--safe-mode')) setSafeMode(true);
@@ -509,7 +537,20 @@ async function main() {
   if (config.general.minimizeToTray) createTray();
   createDiscordWindow();
   // update check: once, a little after startup, so it never competes with Discord loading
-  if (config.general.checkUpdates && app.isPackaged) setTimeout(() => void checkForUpdates(false), 8000).unref();
+  updater = createUpdater({
+    current: app.getVersion(), enabled: app.isPackaged, log, stateFile: path.join(userData(), 'update-state.json'),
+    onState: onUpdateState,
+    onPrompt: () => { updater?.acknowledge(); updateLayer.open(); },
+    beforeInstall: async () => {
+      quitting = true; // windows must really close (not hide to the tray) so the installer can replace the files
+      closeSettings();
+      await flushSave();
+    },
+  });
+  await updater.init();
+  if (updater.state.justUpdated || updater.state.failedTo) discordWin?.once('ready-to-show', () => setTimeout(() => updateLayer.open(), 1200));
+  if (config.general.checkUpdates && app.isPackaged) setTimeout(() => void updater?.check(false), 8000).unref();
+  scheduleUpdateChecks();
   if (process.argv.includes('--settings')) discordWin?.once('ready-to-show', () => setTimeout(openSettings, 1500));
   let flushed = false;
   app.on('before-quit', (e) => {
