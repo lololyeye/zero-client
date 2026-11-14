@@ -123,6 +123,25 @@ function saveSoon(delay = 400) {
 }
 async function flushSave() { clearTimeout(saveTimer); await store.save(config); }
 
+/**
+ * Keeps you signed in across restarts and updates: before ZERO exits, Discord's page is unloaded normally (so
+ * Discord's own code writes its state) and Chromium's storage is flushed to disk. ZERO never reads that storage.
+ */
+let sessionSaved: Promise<void> | null = null;
+function saveSession(): Promise<void> {
+  return (sessionSaved ??= (async () => {
+    const win = discordWin && !discordWin.isDestroyed() ? discordWin : null;
+    const wc = win?.webContents;
+    if (win && wc && !wc.isDestroyed() && isDiscordUrl(wc.getURL())) {
+      win.hide();
+      wc.once('will-prevent-unload', (e) => e.preventDefault()); // a "leave page?" prompt must not block quitting
+      await Promise.race([wc.loadURL('about:blank').catch(() => undefined), new Promise((r) => setTimeout(r, 3000))]);
+    }
+    session.defaultSession.flushStorageData();
+    await session.defaultSession.cookies.flushStore();
+  })().catch((err) => log.warn('session save failed', err)));
+}
+
 function publicState() {
   const perf = resolvePerf(config);
   return {
@@ -544,7 +563,7 @@ async function main() {
     beforeInstall: async () => {
       quitting = true; // windows must really close (not hide to the tray) so the installer can replace the files
       closeSettings();
-      await flushSave();
+      await Promise.all([flushSave(), saveSession()]);
     },
   });
   await updater.init();
@@ -556,10 +575,10 @@ async function main() {
   app.on('before-quit', (e) => {
     quitting = true;
     if (flushed) return;
-    // make sure a debounced edit is on disk before exiting
+    // make sure a debounced edit and the Discord login are on disk before exiting
     e.preventDefault();
     flushed = true;
-    void flushSave().catch((err) => log.error('final save failed', err)).finally(() => app.quit());
+    void Promise.all([flushSave().catch((err) => log.error('final save failed', err)), saveSession()]).finally(() => app.quit());
   });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   app.on('child-process-gone', (_e, d) => log.warn(`child process gone: ${d.type} ${d.reason}`));

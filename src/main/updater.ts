@@ -48,6 +48,7 @@ export function createUpdater(o: UpdaterOptions) {
   autoUpdater.allowPrerelease = false;
   autoUpdater.allowDowngrade = false;
   autoUpdater.autoRunAppAfterInstall = true;
+  autoUpdater.disableWebInstaller = true; // full installer only
   autoUpdater.logger = {
     info: (m: unknown) => o.log.info(`updater: ${String(m)}`),
     warn: (m: unknown) => o.log.warn(`updater: ${String(m)}`),
