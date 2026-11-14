@@ -1,3 +1,4 @@
+import { sanitizeBuiltins, type BuiltinState } from './builtins';
 import { cls, DEFAULT_THEME, PRESET_IDS, PRESETS, validateTheme, type RenderFlags, type Theme } from './theme';
 
 export const CONFIG_VERSION = 3;
@@ -37,6 +38,8 @@ export interface Config {
   layouts: Record<string, LayoutProfile>;
   performance: { profile: PerfProfile; custom: PerfOptions };
   plugins: { enabled: Record<string, boolean>; granted: Record<string, string[]> };
+  /** built-in plugins (see shared/builtins.ts), all off by default */
+  builtins: Record<string, BuiltinState>;
   recovery: { crashStreak: number; safeMode: boolean };
 }
 
@@ -67,6 +70,7 @@ export function defaultConfig(): Config {
     layouts: Object.fromEntries(DEFAULT_LAYOUTS.map((l) => [l.id, l])),
     performance: { profile: 'balanced', custom: { ...PERF_PRESETS.balanced } },
     plugins: { enabled: {}, granted: {} },
+    builtins: sanitizeBuiltins({}),
     recovery: { crashStreak: 0, safeMode: false },
   };
 }
@@ -170,6 +174,7 @@ export function sanitizeConfig(c: any): Config {
       enabled: typeof c.plugins?.enabled === 'object' && c.plugins.enabled ? c.plugins.enabled : {},
       granted: typeof c.plugins?.granted === 'object' && c.plugins.granted ? c.plugins.granted : {},
     },
+    builtins: sanitizeBuiltins(c.builtins),
     recovery: {
       crashStreak: Number.isInteger(c.recovery?.crashStreak) ? c.recovery.crashStreak : 0,
       safeMode: bool(c.recovery?.safeMode, false),

@@ -97,7 +97,17 @@ Profiles: **Balanced** (everything on), **Lightweight** (no blur, no animations,
 - The compatibility check is read-only. It verifies the stylesheet is present (exactly one) and **winning** (Discord's variable resolves to ZERO's value), plus the required anchors and variables. Optional parts (message input) are not flagged on pages that don't have them. It reports `ok / degraded / unknown` and never claims a Discord build is "supported".
 - Plugin failures are isolated per plugin and surfaced in the UI.
 
-## Plugins (v1: declarative)
+## Built-in plugins
+
+Ten plugins ship with ZERO (`src/shared/builtins.ts` catalog, `src/preload/runtime.ts` page code, `src/main/games.ts` game detection), all off by default and toggled in Settings > Plugins.
+
+- **Where they run.** They need Discord's own data (presences, messages, voice state, settings), so `runtime.ts` runs in Discord's page world. It is one self-contained function installed by the Discord preload with `contextBridge.executeInMainWorld`. It receives only a JSON string event (`zero:cfg`: enabled plugins, their settings, the detected game) and can only emit `zero:crash` (a rate-limited reload request, at most 3 in 10 minutes). It gets no IPC, no files and no ZERO storage, and it never reads tokens, cookies or credentials.
+- **Cost.** With every plugin off it does nothing. Discord's modules are looked up lazily when the first plugin starts: one scan, about 12 ms. DOM plugins share one MutationObserver throttled to 250 ms, disconnected when none is on. The Flux `dispatch` wrapper is installed only for MessageLogger.
+- **Discord internals.** Stores are found by `getName()`. Settings use Discord's own accessors (`getSetting`/`updateSetting`), found from their `("group","key")` declaration. The status setter, `openUserProfileModal` and `LOCAL_ACTIVITY_UPDATE` are Discord's own; nothing calls Discord's HTTP API.
+- **GameDetection.** While GameDetection or AutoDND is on, the main process reads running program names every 15 s (`tasklist`). It matches them against Discord's public detectable-games list, cached for 7 days in `detectable-games.json`; generic names and launchers are skipped. IgnoreActivities filters here, so ignored games are never reported.
+- **MessageLogger.** Logs in memory only (at most 2000 entries), cleared on restart.
+
+## Style add-ons (plugins folder, v1: declarative)
 
 `plugins/<id>/plugin.json` + optional stylesheet. Permission model (`ui.css`, `ui.panel`, `storage.local`, `theme.read`, `shortcuts`): the user must grant each. v1 loads only linted CSS; **no plugin JavaScript is executed**. A scripted runtime needs a real sandbox (a separate sandboxed renderer with a message API) and is deliberately not faked with `vm`.
 

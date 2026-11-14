@@ -23,6 +23,8 @@ import { routeKind } from '../preload/controller';
 import type { UpdateState } from './updates';
 import { createUpdater } from './updater';
 import { createOverlay } from './overlay';
+import { createGameDetector } from './games';
+import { activeBuiltins, BUILTINS, sanitizeBuiltin } from '../shared/builtins';
 
 const APP_NAME = 'ZERO';
 const BRANCH_URL = { stable: 'https://discord.com/app', ptb: 'https://ptb.discord.com/app', canary: 'https://canary.discord.com/app' } as const;
@@ -156,9 +158,31 @@ function broadcast() { if (settingsView && !settingsView.webContents.isDestroyed
 function commit(next: Config, opts: { broadcast?: boolean } = {}) {
   config = next;
   recompileAndPush();
+  pushBuiltins();
   saveSoon();
   if (opts.broadcast !== false) broadcast();
 }
+
+// ------------------------------------------------------------------------------------------------
+// Built-in plugins: enabled ones (and the detected game) go to the Discord page; nothing is sent while all are off.
+let games: ReturnType<typeof createGameDetector> | null = null;
+let lastBuiltins = '';
+function builtinsPayload() {
+  return { plugins: activeBuiltins(config.builtins, config.recovery.safeMode), game: games?.current ?? null };
+}
+function pushBuiltins(force = false) {
+  const b = config.builtins;
+  const safe = config.recovery.safeMode;
+  games?.configure(!safe && (b.gameDetection?.enabled === true || b.autoDndWhilePlaying?.enabled === true),
+    b.ignoreActivities?.enabled ? (b.ignoreActivities.settings.ignored as string[]) : []);
+  const p = builtinsPayload();
+  const json = JSON.stringify(p);
+  if (!force && json === lastBuiltins) return;
+  lastBuiltins = json;
+  const wc = discordWin?.webContents;
+  if (wc && !wc.isDestroyed()) wc.send('zero:builtins', p);
+}
+const crashReloads: number[] = [];
 
 async function reloadPlugins() {
   plugins = await loadPlugins(path.join(userData(), 'plugins'), config.plugins, config.recovery.safeMode);
@@ -354,12 +378,22 @@ function registerIpc() {
     if (!wc || e.sender !== wc || e.senderFrame !== wc.mainFrame) return null;
     theme.route = '';
     updateRoute(wc.getURL());
-    return { ...payload(), route: theme.route, hint: !config.general.introSeen };
+    return { ...payload(), route: theme.route, hint: !config.general.introSeen, builtins: builtinsPayload() };
   });
 
   const fromDiscord = (e: Electron.IpcMainEvent) => { const wc = discordWin?.webContents; return !!wc && e.sender === wc && e.senderFrame === wc.mainFrame; };
   // The ZERO button in Discord's user panel can only ask to open settings and to dismiss the one-time hint.
   ipcMain.on('zero:openSettings', (e) => { if (fromDiscord(e)) openSettings(); });
+  // CrashHandler: Discord showed its crash screen. Reload, at most 3 times in 10 minutes.
+  ipcMain.on('zero:crash', (e) => {
+    if (!fromDiscord(e) || !config.builtins.crashHandler?.enabled || config.recovery.safeMode) return;
+    const now = Date.now();
+    while (crashReloads.length && now - crashReloads[0]! > 600_000) crashReloads.shift();
+    if (crashReloads.length >= 3) { log.warn('crash handler: too many crashes, not reloading again'); return; }
+    crashReloads.push(now);
+    log.warn('crash handler: Discord crash screen detected, reloading');
+    discordWin?.webContents.reload();
+  });
   ipcMain.on('zero:hintDone', (e) => { if (fromDiscord(e) && !config.general.introSeen) commit({ ...config, general: { ...config.general, introSeen: true } }, { broadcast: false }); });
 
   const guard = (e: Electron.IpcMainInvokeEvent) => {
@@ -469,6 +503,14 @@ function registerIpc() {
     return images.import(r.filePaths[0]);
   });
   handle('bg:list', () => images.list());
+  handle('builtins:set', (id: string, patch: { enabled?: boolean; settings?: Record<string, unknown> }) => {
+    const def = BUILTINS.find((d) => d.id === id);
+    if (!def || !patch || typeof patch !== 'object') return;
+    const cur = config.builtins[id]!;
+    const next = sanitizeBuiltin(def, { enabled: patch.enabled ?? cur.enabled, settings: { ...cur.settings, ...patch.settings } });
+    commit({ ...config, builtins: { ...config.builtins, [id]: next } });
+    if (patch.enabled !== undefined) log.info(`built-in plugin ${id} ${next.enabled ? 'on' : 'off'}`);
+  });
   handle('plugins:setEnabled', async (id: string, on: boolean) => { config = { ...config, plugins: { ...config.plugins, enabled: { ...config.plugins.enabled, [id]: on } } }; await reloadPlugins(); commit(config); });
   handle('plugins:grant', async (id: string, perms: string[]) => { config = { ...config, plugins: { ...config.plugins, granted: { ...config.plugins.granted, [id]: perms } } }; await reloadPlugins(); commit(config); });
   handle('plugins:openFolder', async () => { const d = path.join(userData(), 'plugins'); await fs.mkdir(d, { recursive: true }); await shell.openPath(d); });
@@ -556,6 +598,8 @@ async function main() {
   if (config.general.minimizeToTray) createTray();
   createDiscordWindow();
   // update check: once, a little after startup, so it never competes with Discord loading
+  games = createGameDetector({ dir: userData(), log, onChange: () => pushBuiltins(true) });
+  pushBuiltins(true);
   updater = createUpdater({
     current: app.getVersion(), enabled: app.isPackaged, log, stateFile: path.join(userData(), 'update-state.json'),
     onState: onUpdateState,

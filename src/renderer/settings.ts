@@ -4,6 +4,7 @@ import {
 } from '../shared/theme';
 import { type Config, type LayoutProfile, type PerfOptions, type PerfProfile } from '../shared/config';
 import { PERMISSIONS, type PluginInfo } from '../shared/plugin';
+import { BUILTINS, type BuiltinDef, type SettingValue } from '../shared/builtins';
 import type { Channel } from '../shared/ipc';
 import type { PerfSnapshot } from '../main/perf';
 import type { CompatReport } from '../main/inject';
@@ -70,6 +71,7 @@ const ICONS: Record<string, string> = {
   advanced: '<path d="M12 3 5 6v5c0 4.4 3 8.4 7 10 4-1.6 7-5.6 7-10V6l-7-3Z"/>',
   about: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/>',
   upload: '<path d="M12 16V4M7 9l5-5 5 5M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
 };
 function icon(name: string, size = 18): Element {
@@ -581,12 +583,16 @@ sect('general', 'General', 'Client', 'tray minimize startup hardware acceleratio
 });
 
 // ---- Plugins ----
-sect('plugins', 'Plugins', 'Client', 'extension addon permission enable disable', () => {
+sect('plugins', 'Plugins', 'Client', 'extension addon permission enable disable builtin message logger platform call timer rpc game activity dnd crash', () => {
   const ps = state.plugins;
-  return page('Plugins', 'Plugins are style add-ons. They run no scripts and can never access your account.',
+  return page('Plugins', 'Built-in plugins ship with ZERO and stay idle while off, so they cost nothing until you turn them on.',
+    h('h2', { class: 'bp-title' }, 'Plugins'),
+    h('div', { class: 'bp-grid' }, ...BUILTINS.map((d) => builtinCard(d))),
+    h('h2', { class: 'bp-title' }, 'Style add-ons'),
+    h('p', { class: 'muted small', style: 'margin:-4px 0 10px' }, 'Add-ons from your plugins folder. They run no scripts and can never access your account.'),
     h('div', { class: 'actions' },
       btn('Open plugins folder', () => call('plugins:openFolder'), 'sm'),
-      btn('Reload plugins', () => call('plugins:reload').then(() => toast('Plugins reloaded')), 'ghost sm')),
+      btn('Reload add-ons', () => call('plugins:reload').then(() => toast('Add-ons reloaded')), 'ghost sm')),
     ps.length ? h('div', {}, ...ps.map((p) => {
       const m = p.manifest;
       const badge = { enabled: ['ok', 'Enabled'], disabled: ['', 'Disabled'], error: ['err', 'Error'], incompatible: ['err', 'Incompatible'], 'needs-permission': ['warn', 'Needs permission'] }[p.status];
@@ -598,8 +604,42 @@ sect('plugins', 'Plugins', 'Client', 'extension addon permission enable disable'
         p.error && h('div', { class: 'issue error' }, p.error),
         m.permissions.length ? h('div', { class: 'muted small', style: 'margin-top:8px' }, 'Asks for: ' + m.permissions.map((x) => PERMISSIONS[x]).join('; ')) : null,
         canToggle && p.missingPermissions.length ? h('div', { class: 'actions' }, btn('Allow requested permissions', () => call('plugins:grant', m.id, m.permissions), 'primary sm')) : null);
-    })) : h('div', { class: 'empty' }, 'No plugins yet. Put a plugin folder (with a plugin.json) in the plugins folder, then press Reload plugins.'));
+    })) : h('div', { class: 'empty' }, 'No add-ons. Put a folder with a plugin.json in the plugins folder, then press Reload add-ons.'));
 });
+
+function builtinCard(d: BuiltinDef) {
+  const st = state.config.builtins[d.id] ?? { enabled: false, settings: {} };
+  const gear = d.settings.length || d.note
+    ? h('button', { class: 'bp-gear', title: `${d.name} settings`, 'aria-label': `${d.name} settings`, onclick: () => void builtinSettings(d) }, icon('gear', 20))
+    : null;
+  return h('div', { class: 'bp-card' + (st.enabled ? ' on' : '') },
+    h('div', { class: 'bp-head' }, h('b', {}, d.name), gear, toggle(st.enabled, (v) => call('builtins:set', d.id, { enabled: v }).then(() => toast(`${d.name} ${v ? 'enabled' : 'disabled'}`)), `Enable ${d.name}`)),
+    h('p', { class: 'bp-desc', title: d.description }, d.description));
+}
+
+function builtinSettings(d: BuiltinDef) {
+  const cur = { ...state.config.builtins[d.id]?.settings } as Record<string, SettingValue>;
+  return modal<Record<string, SettingValue>>((close) => {
+    const fields = d.settings.map((f) => {
+      let ctl: HTMLElement;
+      if (f.type === 'bool') ctl = toggle(cur[f.key] === true, (v) => { cur[f.key] = v; }, f.label);
+      else if (f.type === 'select') ctl = select(String(cur[f.key] ?? f.default), f.options.map((o) => [o.value, o.label] as [string, string]), (v) => { cur[f.key] = v; });
+      else if (f.type === 'list') {
+        const ta = h('textarea', { class: 'text full', rows: 5, spellcheck: false, placeholder: f.placeholder ?? '', oninput: () => { cur[f.key] = ta.value.split(/\r?\n/); } });
+        ta.value = ((cur[f.key] as string[] | undefined) ?? []).join('\n');
+        ctl = ta;
+      } else {
+        const i = h('input', { class: 'text full', value: String(cur[f.key] ?? ''), maxLength: f.max, placeholder: f.placeholder ?? '', spellcheck: false, oninput: () => { cur[f.key] = i.value; } });
+        ctl = i;
+      }
+      return f.type === 'bool' ? h('div', { class: 'bp-field row-inline' }, h('span', {}, f.label), ctl) : h('div', { class: 'bp-field' }, h('label', {}, f.label), ctl);
+    });
+    return {
+      body: [h('h3', {}, d.name), h('p', { class: 'muted' }, d.description), d.note ? h('p', { class: 'muted small' }, d.note) : null, ...fields],
+      foot: d.settings.length ? [btn('Cancel', () => close(null), 'ghost'), btn('Save', () => close(cur), 'primary')] : [btn('Close', () => close(null), 'primary')],
+    };
+  }).then((v) => { if (v) return call('builtins:set', d.id, { settings: v }).then(() => toast(`${d.name} saved`)); });
+}
 
 // ---- Shortcuts ----
 sect('shortcuts', 'Shortcuts', 'Client', 'hotkey keybind keys keyboard escape', () => page('Shortcuts', 'These work while the Discord window is focused.',
