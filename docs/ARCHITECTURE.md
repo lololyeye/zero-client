@@ -104,5 +104,6 @@ Profiles: **Balanced** (everything on), **Lightweight** (no blur, no animations,
 ## Runtime lessons (verified by running the app)
 
 - `webContents.insertCSS` with `cssOrigin:'user'` cannot be removed. ZERO no longer uses `insertCSS` at all: the preload controller owns a single style element.
-- The settings window and Discord share the default session. Never install session-wide header rewrites for the settings page; use a CSP `<meta>` in `settings.html` instead.
+- ZERO settings are a `WebContentsView` layered over the Discord page inside the same window (sandboxed, context-isolated, own preload with the channel allowlist). It is created on open and destroyed on close, so it costs nothing while closed. The ZERO button in Discord's user panel (`src/preload/launcher.ts`) can only send `zero:openSettings` and `zero:hintDone`; main checks that the sender is the Discord main frame.
+- The settings page and Discord share the default session. Never install session-wide header rewrites for the settings page; use a CSP `<meta>` in `settings.html` instead.
 - Opening Settings in the same tick as the main window left Discord's renderer unresponsive. `--settings` opens it after first paint.

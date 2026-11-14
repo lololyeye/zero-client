@@ -14,6 +14,7 @@ Custom themes and backgrounds that actually apply everywhere, with no restart ne
 1. Download `ZERO-Setup-x.y.z.exe` from the [latest release](https://github.com/lololyeye/zero-client/releases/latest).
 2. Run it and choose where to install.
 3. Sign in to Discord as usual. ZERO loads Discord's official web app.
+4. Open ZERO's settings with the **ZERO button** at the bottom left, next to Discord's settings gear (or press `Ctrl+,`). They open inside the window, like Discord's own settings. `Esc` closes them.
 
 > The installer is not code-signed yet, so Windows SmartScreen may warn you. Click **More info → Run anyway**.
 
@@ -29,7 +30,7 @@ Custom themes and backgrounds that actually apply everywhere, with no restart ne
 - **Backups:** settings are saved atomically with rolling backups, and a corrupted file is restored from the latest backup.
 - **Plugins:** CSS-only plugins with explicit permissions.
 
-Shortcuts: `Ctrl+,` opens Settings, `Ctrl+Shift+Z` toggles Safe Mode.
+Shortcuts: `Ctrl+,` opens or closes ZERO settings, `Esc` closes them, `Ctrl+F` searches them, `Ctrl+Shift+Z` toggles Safe Mode.
 
 ## Privacy and safety
 

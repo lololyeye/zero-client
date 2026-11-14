@@ -1,5 +1,5 @@
 import {
-  app, BrowserWindow, ipcMain, shell, session, protocol, Tray, Menu, nativeImage, dialog, desktopCapturer, net,
+  app, BrowserWindow, WebContentsView, ipcMain, shell, session, protocol, Tray, Menu, nativeImage, dialog, desktopCapturer, net,
   type WebContents,
 } from 'electron';
 import path from 'node:path';
@@ -15,7 +15,7 @@ import { COMPAT_PROBE_SCRIPT, evaluateCompat, type CompatReport } from './inject
 import { summarizeMetrics, type PerfSnapshot } from './perf';
 import { activeTheme, applyThemeEdit, composeDiscordCss, referencedImages } from './compose';
 import * as T from './themeOps';
-import { resolvePerf, sanitizeLayout, sanitizePerfOptions, type Config, type PerfProfile } from '../shared/config';
+import { resolvePerf, sanitizeConfig, sanitizeLayout, sanitizePerfOptions, type Config, type PerfProfile } from '../shared/config';
 import { validateTheme } from '../shared/theme';
 import { CHANNELS } from '../shared/ipc';
 import { routeKind } from '../preload/controller';
@@ -38,7 +38,8 @@ let log: Logger;
 let images: ImageStore;
 let plugins: LoadedPlugins = { infos: [], css: new Map() };
 let discordWin: BrowserWindow | null = null;
-let settingsWin: BrowserWindow | null = null;
+/** ZERO settings: a layer inside the Discord window (like Discord's own settings), not a separate window. */
+let settingsView: WebContentsView | null = null;
 let tray: Tray | null = null;
 let quitting = false;
 let startupMs: number | null = null;
@@ -126,7 +127,7 @@ function publicState() {
     pluginsDir: path.join(userData(), 'plugins'), perf, missingImages: [...theme.missing], update,
   };
 }
-function broadcast() { if (settingsWin && !settingsWin.isDestroyed()) settingsWin.webContents.send('state:changed', publicState()); }
+function broadcast() { if (settingsView && !settingsView.webContents.isDestroyed()) settingsView.webContents.send('state:changed', publicState()); }
 
 /** Commit a new config: apply to Discord now, persist soon, tell the settings window. */
 function commit(next: Config, opts: { broadcast?: boolean } = {}) {
@@ -211,13 +212,14 @@ function createDiscordWindow() {
   win.webContents.on('before-input-event', (e, input) => {
     if (input.type !== 'keyDown') return;
     const ctrl = input.control || input.meta;
-    if (ctrl && input.key === ',') { e.preventDefault(); openSettings(); }
+    if (ctrl && input.key === ',') { e.preventDefault(); toggleSettings(); }
     if (ctrl && input.shift && input.key.toLowerCase() === 'z') { e.preventDefault(); setSafeMode(!config.recovery.safeMode); }
   });
   win.on('close', (e) => {
     if (!quitting && config.general.minimizeToTray && tray) { e.preventDefault(); win.hide(); }
   });
-  win.on('closed', () => { discordWin = null; });
+  win.on('resize', fitSettings);
+  win.on('closed', () => { discordWin = null; settingsView = null; });
   void win.loadURL(BRANCH_URL[config.general.discordBranch]);
 }
 
@@ -243,23 +245,51 @@ async function checkForUpdates(interactive: boolean): Promise<UpdateInfo | null>
   return update;
 }
 
+function fitSettings() {
+  if (!settingsView || !discordWin) return;
+  const [width, height] = discordWin.getContentSize();
+  settingsView.setBounds({ x: 0, y: 0, width: width!, height: height! });
+}
+
 function openSettings() {
-  if (settingsWin && !settingsWin.isDestroyed()) { settingsWin.show(); settingsWin.focus(); return; }
-  settingsWin = new BrowserWindow({
-    width: 1120, height: 760, minWidth: 820, minHeight: 540, title: `${APP_NAME} Settings`, backgroundColor: '#14161b', icon: makeIcon(64), autoHideMenuBar: true,
+  const win = discordWin;
+  if (!win || win.isDestroyed()) return;
+  if (!win.isVisible()) win.show();
+  if (settingsView) { settingsView.webContents.focus(); return; }
+  const view = new WebContentsView({
     webPreferences: { preload: path.join(__dirname, '..', 'preload', 'settings.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false },
   });
-  guardNavigation(settingsWin.webContents);
-  void settingsWin.loadFile(path.join(rendererDir(), 'settings.html'));
-  settingsWin.on('closed', () => { settingsWin = null; });
+  settingsView = view;
+  view.setBackgroundColor('#00000000'); // the page fades in over Discord
+  guardNavigation(view.webContents);
+  view.webContents.on('before-input-event', (e, input) => {
+    if (input.type !== 'keyDown') return;
+    const ctrl = input.control || input.meta;
+    if (ctrl && input.key === ',') { e.preventDefault(); closeSettings(); }
+    if (ctrl && input.shift && input.key.toLowerCase() === 'z') { e.preventDefault(); setSafeMode(!config.recovery.safeMode); }
+  });
+  view.webContents.on('render-process-gone', () => closeSettings());
+  win.contentView.addChildView(view);
+  fitSettings();
+  void view.webContents.loadFile(path.join(rendererDir(), 'settings.html')).then(() => view.webContents.focus());
 }
+
+function closeSettings() {
+  const view = settingsView;
+  if (!view) return;
+  settingsView = null;
+  if (discordWin && !discordWin.isDestroyed()) { discordWin.contentView.removeChildView(view); discordWin.webContents.focus(); }
+  if (!view.webContents.isDestroyed()) view.webContents.close(); // frees the settings renderer
+}
+
+function toggleSettings() { if (settingsView) closeSettings(); else openSettings(); }
 
 function createTray() {
   tray = new Tray(makeIcon(32));
   tray.setToolTip(APP_NAME);
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: `Open ${APP_NAME}`, click: () => { discordWin?.show(); } },
-    { label: 'Settings', click: openSettings },
+    { label: 'ZERO settings', click: openSettings },
     { label: 'Toggle Safe Mode', click: () => setSafeMode(!config.recovery.safeMode) },
     { type: 'separator' },
     { label: 'Quit', click: () => { quitting = true; app.quit(); } },
@@ -277,11 +307,16 @@ function registerIpc() {
     if (!wc || e.sender !== wc || e.senderFrame !== wc.mainFrame) return null;
     theme.route = '';
     updateRoute(wc.getURL());
-    return { ...payload(), route: theme.route };
+    return { ...payload(), route: theme.route, hint: !config.general.introSeen };
   });
 
+  const fromDiscord = (e: Electron.IpcMainEvent) => { const wc = discordWin?.webContents; return !!wc && e.sender === wc && e.senderFrame === wc.mainFrame; };
+  // The ZERO button in Discord's user panel can only ask to open settings and to dismiss the one-time hint.
+  ipcMain.on('zero:openSettings', (e) => { if (fromDiscord(e)) openSettings(); });
+  ipcMain.on('zero:hintDone', (e) => { if (fromDiscord(e) && !config.general.introSeen) commit({ ...config, general: { ...config.general, introSeen: true } }, { broadcast: false }); });
+
   const guard = (e: Electron.IpcMainInvokeEvent) => {
-    if (!settingsWin || e.sender !== settingsWin.webContents) throw new Error('Unauthorized sender');
+    if (!settingsView || e.sender !== settingsView.webContents) throw new Error('Unauthorized sender');
   };
   const handle = (ch: (typeof CHANNELS)[number], fn: (...a: any[]) => unknown | Promise<unknown>) =>
     ipcMain.handle(ch, async (e, ...args) => {
@@ -291,6 +326,7 @@ function registerIpc() {
     });
 
   handle('state:get', () => publicState());
+  handle('settings:close', () => { setImmediate(closeSettings); });
   handle('update:check', () => checkForUpdates(true));
   handle('update:open', () => { void shell.openExternal(update?.installerUrl ?? update?.url ?? RELEASES_PAGE); });
   // Live edit: validate -> commit (Discord updates immediately) -> persist (debounced). Invalid input keeps
@@ -310,7 +346,7 @@ function registerIpc() {
   handle('theme:rename', (id, name) => commit(T.renameTheme(config, id, name)));
   handle('theme:delete', (id) => commit(T.deleteTheme(config, id)));
   handle('theme:import', async () => {
-    const r = await dialog.showOpenDialog(settingsWin!, { title: 'Import ZERO theme', filters: [{ name: 'ZERO theme', extensions: ['json', 'zerotheme'] }], properties: ['openFile'] });
+    const r = await dialog.showOpenDialog(discordWin!, { title: 'Import ZERO theme', filters: [{ name: 'ZERO theme', extensions: ['json', 'zerotheme'] }], properties: ['openFile'] });
     if (r.canceled || !r.filePaths[0]) return null;
     const text = await fs.readFile(r.filePaths[0], 'utf8');
     const imported = T.parseImportedTheme(text);
@@ -321,7 +357,7 @@ function registerIpc() {
   });
   handle('theme:export', async (id: string) => {
     const t = config.themes[id]; if (!t) throw new Error('Theme not found');
-    const r = await dialog.showSaveDialog(settingsWin!, { title: 'Export ZERO theme', defaultPath: `${t.id}.zerotheme.json`, filters: [{ name: 'ZERO theme', extensions: ['json'] }] });
+    const r = await dialog.showSaveDialog(discordWin!, { title: 'Export ZERO theme', defaultPath: `${t.id}.zerotheme.json`, filters: [{ name: 'ZERO theme', extensions: ['json'] }] });
     if (r.canceled || !r.filePath) return false;
     await fs.writeFile(r.filePath, T.exportTheme(t), 'utf8');
     return true;
@@ -365,9 +401,9 @@ function registerIpc() {
     commit({ ...config, performance: { profile, custom } });
     applySpellcheck();
   });
-  handle('general:set', (g) => commit({ ...config, general: { ...config.general, ...g } }));
+  handle('general:set', (g) => commit(sanitizeConfig({ ...config, general: { ...config.general, ...(g && typeof g === 'object' ? g : {}) } })));
   handle('bg:import', async () => {
-    const r = await dialog.showOpenDialog(settingsWin!, { title: 'Choose a background image', filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }], properties: ['openFile'] });
+    const r = await dialog.showOpenDialog(discordWin!, { title: 'Choose a background image', filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }], properties: ['openFile'] });
     if (r.canceled || !r.filePaths[0]) return null;
     return images.import(r.filePaths[0]);
   });
