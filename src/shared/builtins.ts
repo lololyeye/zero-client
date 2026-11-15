@@ -92,6 +92,12 @@ export const BUILTINS: BuiltinDef[] = [
     ],
   },
   {
+    id: 'messageReminder', name: 'MessageReminder',
+    description: 'Right click a message › Remind me: in 10 minutes, tomorrow, next week. ZERO brings you back to the message.',
+    note: 'Reminders ring while ZERO is running (one that was due while it was closed rings at the next start). Listed in the ZERO panel (Ctrl+Shift+L). Saved on this PC only.',
+    settings: [],
+  },
+  {
     id: 'platformIndicators', name: 'PlatformIndicators',
     description: 'Adds platform indicators (Desktop, Mobile, Web...) to users',
     settings: [
@@ -99,6 +105,38 @@ export const BUILTINS: BuiltinDef[] = [
       { key: 'messages', label: 'Messages', type: 'bool', default: true },
       { key: 'dms', label: 'Direct messages list', type: 'bool', default: true },
     ],
+  },
+  {
+    id: 'privacyMode', name: 'PrivacyMode',
+    description: 'Ctrl+Shift+H blurs names, avatars and message previews before you share your screen.',
+    note: 'A red badge shows while it is on. Nothing is changed on your account.',
+    settings: [
+      { key: 'names', label: 'Blur names', type: 'bool', default: true },
+      { key: 'avatars', label: 'Blur avatars', type: 'bool', default: true },
+      { key: 'previews', label: 'Blur statuses and previews (DM list, activities)', type: 'bool', default: true },
+      { key: 'messages', label: 'Blur message text, images and embeds', type: 'bool', default: false },
+      { key: 'notifications', label: 'Hide names and text in desktop notifications', type: 'bool', default: true },
+      { key: 'hover', label: 'Show a blurred item while the mouse is over it', type: 'bool', default: false },
+      { key: 'autoStream', label: 'Turn on by itself while you share your screen', type: 'bool', default: false },
+    ],
+  },
+  {
+    id: 'quickNotes', name: 'QuickNotes',
+    description: 'A small notepad inside ZERO: notes, lists, links, from any server.',
+    note: 'In the ZERO panel (Ctrl+Shift+L, or the button in the channel header). Saved on this PC only.',
+    settings: [],
+  },
+  {
+    id: 'smartBookmarks', name: 'SmartBookmarks',
+    description: 'Save messages, images, links and files into your own collections, and search them all.',
+    note: 'Right click a message › Save message. Browse in the ZERO panel (Ctrl+Shift+L). Saved on this PC only; Discord image links can expire, the message link stays.',
+    settings: [],
+  },
+  {
+    id: 'smartText', name: 'SmartText',
+    description: 'Saved replies with variables. Type ;; in a message box to insert one.',
+    note: 'Variables: {me}, {user} (the person in a DM, or the one you are replying to), {channel}, {server}, {date}, {time}. Inserted into the box, never sent for you. Manage them in the ZERO panel (Ctrl+Shift+L).',
+    settings: [],
   },
 ];
 

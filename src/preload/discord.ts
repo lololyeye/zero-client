@@ -4,8 +4,9 @@ import { createLauncher } from './launcher';
 import { zeroRuntime } from './runtime';
 import { zeroMediaStats } from './mediastats';
 import { customActivity, type SettingValue } from '../shared/builtins';
+import { isDataPlugin, MAX_DOC_CHARS } from '../shared/pluginData';
 
-interface BuiltinsPayload { plugins: Record<string, Record<string, SettingValue>>; game: { id: string; name: string; start: number } | null }
+interface BuiltinsPayload { plugins: Record<string, Record<string, SettingValue>>; game: { id: string; name: string; start: number } | null; data?: Record<string, unknown> }
 
 /**
  * Preload for the Discord window. Runs in an isolated world: it shares the DOM with Discord but exposes nothing
@@ -45,9 +46,21 @@ function sendBuiltins(p: BuiltinsPayload | undefined): void {
     rpcStart ||= Date.now();
     plugins.customRpc = { activity: customActivity(p.plugins.customRpc!, rpcStart) };
   } else rpcStart = 0;
-  document.dispatchEvent(new CustomEvent('zero:cfg', { detail: JSON.stringify({ plugins, game: p.game }) }));
+  document.dispatchEvent(new CustomEvent('zero:cfg', { detail: JSON.stringify({ plugins, game: p.game, data: p.data ?? {} }) }));
 }
 document.addEventListener('zero:crash', () => ipcRenderer.send('zero:crash'));
+// Plugin data (MessageReminder, SmartBookmarks, QuickNotes, SmartText): ZERO's main process accepts it only for
+// those four plugins while they are on, and validates it against their schema. The detail is one string
+// (objects do not cross from the page world): the plugin id, a newline, then the JSON.
+document.addEventListener('zero:data-save', (e) => {
+  const d = (e as CustomEvent).detail;
+  if (typeof d !== 'string' || d.length > MAX_DOC_CHARS + 40) return;
+  const nl = d.indexOf('\n');
+  const id = d.slice(0, nl);
+  if (nl < 1 || !isDataPlugin(id)) return;
+  ipcRenderer.send('zero:data', id, d.slice(nl + 1));
+});
+document.addEventListener('zero:focus', () => ipcRenderer.send('zero:focus'));
 
 // Voice / stream diagnostics (Settings > Performance, only while that page is open). See mediastats.ts.
 try { contextBridge.executeInMainWorld({ func: zeroMediaStats }); } catch { /* diagnostics unavailable */ }

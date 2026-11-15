@@ -25,6 +25,8 @@ import { createUpdater } from './updater';
 import { createOverlay } from './overlay';
 import { createGameDetector } from './games';
 import { activeBuiltins, BUILTINS, sanitizeBuiltin } from '../shared/builtins';
+import { PluginDataStore } from './pluginData';
+import { DATA_PLUGINS, isDataPlugin } from '../shared/pluginData';
 
 const APP_NAME = 'ZERO';
 const BRANCH_URL = { stable: 'https://discord.com/app', ptb: 'https://ptb.discord.com/app', canary: 'https://canary.discord.com/app' } as const;
@@ -225,9 +227,13 @@ function commit(next: Config, opts: { broadcast?: boolean } = {}) {
 // ------------------------------------------------------------------------------------------------
 // Built-in plugins: enabled ones (and the detected game) go to the Discord page; nothing is sent while all are off.
 let games: ReturnType<typeof createGameDetector> | null = null;
+let pluginData: PluginDataStore;
 let lastBuiltins = '';
 function builtinsPayload() {
-  return { plugins: activeBuiltins(config.builtins, config.recovery.safeMode), game: games?.current ?? null };
+  const plugins = activeBuiltins(config.builtins, config.recovery.safeMode);
+  // Saved data goes to the page only for the plugins that are on (a plugin that is off never sees it).
+  const data = Object.fromEntries(DATA_PLUGINS.filter((k) => plugins[k]).map((k) => [k, pluginData.get(k)]));
+  return { plugins, game: games?.current ?? null, data };
 }
 function pushBuiltins(force = false) {
   const b = config.builtins;
@@ -457,6 +463,19 @@ function registerIpc() {
     log.warn('crash handler: Discord crash screen detected, reloading');
     discordWin?.webContents.reload();
   });
+  // Built-in plugin data (reminders, saved messages, notes, snippets): only for a plugin that is on, validated
+  // against its schema, size-capped. See shared/pluginData.ts.
+  ipcMain.on('zero:data', (e, id: unknown, json: unknown) => {
+    if (!fromDiscord(e) || !isDataPlugin(id) || typeof json !== 'string' || config.recovery.safeMode || !config.builtins[id]?.enabled) return;
+    if (!pluginData.setFromPage(id, json)) log.warn(`plugin data for ${id} refused (invalid or too large)`);
+  });
+  // MessageReminder: clicking a reminder notification brings the window to the front (at most once a second).
+  let lastFocus = 0;
+  ipcMain.on('zero:focus', (e) => {
+    if (!fromDiscord(e) || !config.builtins.messageReminder?.enabled || Date.now() - lastFocus < 1000) return;
+    lastFocus = Date.now();
+    if (discordWin) { if (discordWin.isMinimized()) discordWin.restore(); discordWin.show(); discordWin.focus(); }
+  });
   ipcMain.on('zero:hintDone', (e) => { if (fromDiscord(e) && !config.general.introSeen) commit({ ...config, general: { ...config.general, introSeen: true } }, { broadcast: false }); });
 
   const guard = (e: Electron.IpcMainInvokeEvent) => {
@@ -667,6 +686,8 @@ async function main() {
   await refreshMissingImages();
   if (theme.missing.size) log.warn(`missing background image(s): ${[...theme.missing].join(', ')}`);
   theme.css = composeDiscordCss(config, plugins.css.values(), theme.missing);
+  pluginData = new PluginDataStore(userData(), (err) => log.error('plugin data save failed', err));
+  await pluginData.load();
   registerIpc();
   if (config.general.minimizeToTray) createTray();
   createDiscordWindow();
@@ -681,7 +702,7 @@ async function main() {
     beforeInstall: async () => {
       quitting = true; // windows must really close (not hide to the tray) so the installer can replace the files
       closeSettings();
-      await Promise.all([flushSave(), saveSession()]);
+      await Promise.all([flushSave(), saveSession(), pluginData.flush()]);
     },
   });
   await updater.init();
@@ -696,7 +717,7 @@ async function main() {
     // make sure a debounced edit and the Discord login are on disk before exiting
     e.preventDefault();
     flushed = true;
-    void Promise.all([flushSave().catch((err) => log.error('final save failed', err)), saveSession()]).finally(() => app.quit());
+    void Promise.all([flushSave().catch((err) => log.error('final save failed', err)), saveSession(), pluginData.flush()]).finally(() => app.quit());
   });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   app.on('child-process-gone', (_e, d) => log.warn(`child process gone: ${d.type} ${d.reason}`));
