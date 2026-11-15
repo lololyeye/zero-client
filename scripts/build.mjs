@@ -14,6 +14,10 @@ await build({ ...common, entryPoints: ['src/preload/picker.ts'], outfile: 'dist/
 await build({ ...common, entryPoints: ['src/renderer/picker.ts'], outfile: 'dist/renderer/picker.js', platform: 'browser', format: 'iife' });
 await build({ ...common, entryPoints: ['src/preload/update.ts'], outfile: 'dist/preload/update.js', platform: 'node', format: 'cjs', external: ['electron'] });
 await build({ ...common, entryPoints: ['src/renderer/update.ts'], outfile: 'dist/renderer/update.js', platform: 'browser', format: 'iife' });
+await build({ ...common, entryPoints: ['src/preload/voiceoverlay.ts'], outfile: 'dist/preload/voiceoverlay.js', platform: 'node', format: 'cjs', external: ['electron'] });
+await build({ ...common, entryPoints: ['src/renderer/voiceoverlay.ts'], outfile: 'dist/renderer/voiceoverlay.js', platform: 'browser', format: 'iife' });
+await cp('src/renderer/voiceoverlay.html', 'dist/renderer/voiceoverlay.html');
+await cp('src/renderer/voiceoverlay.css', 'dist/renderer/voiceoverlay.css');
 await cp('src/renderer/update.html', 'dist/renderer/update.html');
 await cp('src/renderer/update.css', 'dist/renderer/update.css');
 await cp('src/renderer/picker.html', 'dist/renderer/picker.html');

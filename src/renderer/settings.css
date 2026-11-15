@@ -288,3 +288,8 @@ ul.plain { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 
 .bp-field { display: grid; gap: 6px; margin-top: 12px; }
 .bp-field.row-inline { grid-template-columns: 1fr auto; align-items: center; }
 .bp-field textarea { resize: vertical; font: inherit; }
+/* PluginHub: search and categories */
+.bp-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 14px; }
+.bp-tools .text { width: 220px; }
+/* ThemeStudio */
+h3.sub { margin: 18px 0 4px; font-size: 14px; font-weight: 700; color: var(--text-2); }

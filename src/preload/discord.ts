@@ -49,8 +49,8 @@ function sendBuiltins(p: BuiltinsPayload | undefined): void {
   document.dispatchEvent(new CustomEvent('zero:cfg', { detail: JSON.stringify({ plugins, game: p.game, data: p.data ?? {} }) }));
 }
 document.addEventListener('zero:crash', () => ipcRenderer.send('zero:crash'));
-// Plugin data (MessageReminder, SmartBookmarks, QuickNotes, SmartText): ZERO's main process accepts it only for
-// those four plugins while they are on, and validates it against their schema. The detail is one string
+// Plugin data (MessageReminder, SmartBookmarks, QuickNotes, SmartText, VoiceAnalytics, MicStudio, MessageStatistics):
+// ZERO's main process accepts it only for those plugins while they are on, and validates it against their schema. The detail is one string
 // (objects do not cross from the page world): the plugin id, a newline, then the JSON.
 document.addEventListener('zero:data-save', (e) => {
   const d = (e as CustomEvent).detail;
@@ -61,6 +61,39 @@ document.addEventListener('zero:data-save', (e) => {
   ipcRenderer.send('zero:data', id, d.slice(nl + 1));
 });
 document.addEventListener('zero:focus', () => ipcRenderer.send('zero:focus'));
+
+// The few requests some plugins hand to ZERO. Each one is a short string, checked here and again in main.
+const SIDE_PATH = /^\/channels\/(@me|\d{15,22})\/\d{15,22}$/;
+const pageEvent = (type: string, detail: string) => document.dispatchEvent(new CustomEvent(type, { detail }));
+// DownloadManager: the page sees file names, sizes and states (never where a file is); it can ask for one action.
+document.addEventListener('zero:dl-act', (e) => {
+  const d = (e as CustomEvent).detail;
+  if (typeof d !== 'string' || d.length > 80) return;
+  const [action = '', id = ''] = d.split('\n');
+  if (['list', 'folder', 'clear', 'open', 'show', 'remove', 'cancel'].includes(action) && /^[\w-]{0,40}$/.test(id)) ipcRenderer.send('zero:dl', action, id);
+});
+ipcRenderer.on('zero:downloads', (_e, list: unknown) => pageEvent('zero:dl', JSON.stringify(Array.isArray(list) ? list : [])));
+// InlineTranslator: the text of the one message the user picked, at most 500 characters.
+document.addEventListener('zero:translate', (e) => {
+  const d = (e as CustomEvent).detail;
+  if (typeof d !== 'string' || d.length > 4000) return;
+  let r: any; try { r = JSON.parse(d); } catch { return; }
+  const seq = r?.seq;
+  if (typeof seq !== 'number' || typeof r.text !== 'string' || typeof r.to !== 'string') return;
+  const reply = (x: object) => pageEvent('zero:translated', JSON.stringify({ seq, ...x }));
+  ipcRenderer.invoke('zero:translate', r.text.slice(0, 500), r.to).then((out) => reply(out && typeof out === 'object' ? out : { error: 'Translation failed.' }), () => reply({ error: 'Translation failed.' }));
+});
+// VoiceOverlay: who is in the call (names and talking/muted flags), drawn by ZERO's overlay window.
+document.addEventListener('zero:voice', (e) => {
+  const d = (e as CustomEvent).detail;
+  if (typeof d === 'string' && d.length <= 8000) ipcRenderer.send('zero:voice', d);
+});
+// MultiPanel: open a channel path in the side panel, close it (''), or ask what is open ('?').
+document.addEventListener('zero:side', (e) => {
+  const d = (e as CustomEvent).detail;
+  if (typeof d === 'string' && (d === '' || d === '?' || SIDE_PATH.test(d))) ipcRenderer.send('zero:side', d);
+});
+ipcRenderer.on('zero:side-state', (_e, path: unknown) => pageEvent('zero:side-state', typeof path === 'string' && SIDE_PATH.test(path) ? path : ''));
 
 // Voice / stream diagnostics (Settings > Performance, only while that page is open). See mediastats.ts.
 try { contextBridge.executeInMainWorld({ func: zeroMediaStats }); } catch { /* diagnostics unavailable */ }

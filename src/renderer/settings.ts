@@ -4,7 +4,8 @@ import {
 } from '../shared/theme';
 import { type Config, type LayoutProfile, type PerfOptions, type PerfProfile } from '../shared/config';
 import { PERMISSIONS, type PluginInfo } from '../shared/plugin';
-import { BUILTINS, type BuiltinDef, type SettingValue } from '../shared/builtins';
+import { BUILTINS, CATEGORIES, type BuiltinDef, type SettingValue } from '../shared/builtins';
+import { contrastIssues, fixContrast, generatePalette, type PaletteMode } from '../shared/themeStudio';
 import type { Channel } from '../shared/ipc';
 import type { MediaStream, PerfSnapshot } from '../main/perf';
 import type { CompatReport } from '../main/inject';
@@ -14,6 +15,7 @@ interface AppState {
   config: Config; plugins: PluginInfo[]; notes: string[]; compat: CompatReport | null; startupMs: number | null;
   safeMode: boolean; version: string; electron: string; chrome: string; pluginsDir: string; perf: PerfOptions; missingImages: string[];
   update: UpdateState | null;
+  workspaces: { id: string; name: string; themeId: string; layoutId: string; profile: string; plugins: number }[];
 }
 declare global { interface Window { zero: { invoke(c: Channel, ...a: unknown[]): Promise<{ ok: boolean; data?: any; error?: string }>; onState(cb: (s: AppState) => void): () => void; onUpdate(cb: (s: UpdateState) => void): () => void } } }
 
@@ -70,6 +72,7 @@ const ICONS: Record<string, string> = {
   backups: '<path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
   advanced: '<path d="M12 3 5 6v5c0 4.4 3 8.4 7 10 4-1.6 7-5.6 7-10V6l-7-3Z"/>',
   about: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  workspaces: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 17.5h7M17.5 14v7"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/>',
   upload: '<path d="M12 16V4M7 9l5-5 5 5M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
@@ -253,9 +256,10 @@ function previewBlock() {
 }
 
 // ---- sections ----
-interface Section { id: string; title: string; group: string; terms: string; render: () => HTMLElement }
+interface Section { id: string; title: string; group: string; terms: string; render: () => HTMLElement; visible?: () => boolean }
 const sections: Section[] = [];
-const sect = (id: string, title: string, group: string, terms: string, render: () => HTMLElement) => sections.push({ id, title, group, terms, render });
+const sect = (id: string, title: string, group: string, terms: string, render: () => HTMLElement, visible?: () => boolean) => sections.push({ id, title, group, terms, render, visible });
+const pluginOn = (id: string) => !state.safeMode && state.config.builtins[id]?.enabled === true;
 
 function notices(): Child {
   const msgs = [...(state.safeMode ? ['Safe Mode is on: Discord is shown without any customization.'] : []), ...state.notes.filter((n) => /Safe Mode|unreadable|Restored|migrated|safe-mode/.test(n) && !(state.safeMode && n.startsWith("Safe Mode")))];
@@ -332,11 +336,33 @@ sect('colors', 'Colors', 'Appearance', 'color palette accent text sidebar chat b
   const colorKeys = (Object.keys(COLOR_HELP) as (keyof Theme['colors'])[]).filter((k) => k !== 'bubble');
   return page('Colors', 'Every color of the active theme. Changes show up in Discord as you pick them.',
     previewBlock(),
+    themeStudio(),
     h('h2', {}, 'Palette'),
     h('div', { class: 'colors' }, ...colorKeys.map((k) => h('div', { class: 'ctile' },
       colorInput(draft.colors[k], (v) => edit(() => { draft.colors[k] = v; }), COLOR_HELP[k][0], false),
       h('div', { class: 'txt' }, h('div', { class: 't' }, COLOR_HELP[k][0]), h('div', { class: 'd', title: COLOR_HELP[k][1] }, COLOR_HELP[k][1]))))));
 });
+
+/** ThemeStudio (plugin): a palette from two colors, and a readability check of the active theme. */
+let studio: { base: string; accent: string; mode: PaletteMode } | null = null;
+function themeStudio(): Child {
+  if (!pluginOn('themeStudio')) return null;
+  studio ??= { base: draft.colors.accent, accent: draft.colors.accent, mode: 'dark' };
+  const st = studio;
+  const issues = contrastIssues(draft.colors);
+  return h('div', {},
+    h('h2', {}, 'ThemeStudio'),
+    rows(
+      row('Base color', 'Gives every surface a light tint of its hue.', colorInput(st.base, (v) => { st.base = v; }, 'Base color')),
+      row('Accent', 'Links, mentions, focus and buttons.', colorInput(st.accent, (v) => { st.accent = v; }, 'Accent color')),
+      row('Style', '', seg(st.mode, [['dark', 'Dark'], ['dim', 'Dim'], ['amoled', 'AMOLED'], ['light', 'Light']], (v) => { st.mode = v; })),
+      row('Generate', 'Replaces every color of the active theme. A preset is copied first, as with any edit.', btn('Generate palette', () => { edit(() => { draft.colors = generatePalette(st.base, st.accent, st.mode, draft.colors); }); render(); toast('Palette generated'); }, 'primary sm'))),
+    h('h3', { class: 'sub' }, 'Readability'),
+    issues.length
+      ? h('div', {}, ...issues.map((i) => h('div', { class: 'issue warning' }, `${i.label}: ${i.ratio}:1, needs ${i.min}:1`)),
+        h('div', { class: 'actions' }, btn('Fix readability', () => { edit(() => { draft.colors = fixContrast(draft.colors); }); render(); toast('Text colors adjusted'); }, 'sm')))
+      : h('p', { class: 'muted small' }, 'Every text color is readable on its background (WCAG AA contrast).'));
+}
 
 // ---- Appearance ----
 sect('appearance', 'Appearance', 'Appearance', 'quick accent typography font size weight radius corners shadow blur glass animations spacing bubbles icons', () => {
@@ -626,11 +652,25 @@ sect('general', 'General', 'Client', 'tray minimize startup hardware acceleratio
 });
 
 // ---- Plugins ----
+let plugQuery = '';
+let plugCat = 'all';
 sect('plugins', 'Plugins', 'Client', 'extension addon permission enable disable builtin message logger platform call timer rpc game activity dnd crash', () => {
   const ps = state.plugins;
+  const grid = h('div', { class: 'bp-grid' });
+  const paintGrid = () => {
+    const q = plugQuery.trim().toLowerCase();
+    const list = BUILTINS.filter((d) => (plugCat === 'all' || (plugCat === 'on' ? state.config.builtins[d.id]?.enabled === true : d.category === plugCat))
+      && (!q || `${d.name} ${d.description} ${d.note ?? ''} ${CATEGORIES[d.category]}`.toLowerCase().includes(q))).sort((a, b) => a.name.localeCompare(b.name));
+    grid.replaceChildren(...(list.length ? list.map((d) => builtinCard(d)) : [h('div', { class: 'empty' }, 'No plugin matches.')]));
+  };
+  paintGrid();
+  const onCount = BUILTINS.filter((d) => state.config.builtins[d.id]?.enabled).length;
+  const find = h('input', { class: 'text', type: 'search', placeholder: 'Search plugins', value: plugQuery, spellcheck: false, 'aria-label': 'Search plugins', oninput: () => { plugQuery = find.value; paintGrid(); } });
   return page('Plugins', 'Built-in plugins ship with ZERO and stay idle while off, so they cost nothing until you turn them on.',
     h('h2', { class: 'bp-title' }, 'Plugins'),
-    h('div', { class: 'bp-grid' }, ...BUILTINS.map((d) => builtinCard(d))),
+    h('div', { class: 'bp-tools' }, find,
+      seg(plugCat, [['all', `All (${BUILTINS.length})`], ['on', `On (${onCount})`], ...(Object.entries(CATEGORIES) as [string, string][])], (v) => { plugCat = v; paintGrid(); })),
+    grid,
     h('h2', { class: 'bp-title' }, 'Style add-ons'),
     h('p', { class: 'muted small', style: 'margin:-4px 0 10px' }, 'Add-ons from your plugins folder. They run no scripts and can never access your account.'),
     h('div', { class: 'actions' },
@@ -683,6 +723,25 @@ function builtinSettings(d: BuiltinDef) {
     };
   }).then((v) => { if (v) return call('builtins:set', d.id, { settings: v }).then(() => toast(`${d.name} saved`)); });
 }
+
+// ---- Workspaces (WorkspaceProfiles plugin) ----
+sect('workspaces', 'Workspaces', 'Client', 'workspace profile gaming work switch tray', () => {
+  const ws = state.workspaces ?? [];
+  const name = h('input', { class: 'text', placeholder: 'Name, e.g. Gaming', maxLength: 40, spellcheck: false, 'aria-label': 'Workspace name' });
+  const save = () => { const n = name.value.trim(); if (!n) { name.focus(); return; } void call('workspaces:save', n).then((x) => toast(`Saved “${x}”`)); };
+  name.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+  const themeName = (id: string) => state.config.themes[id]?.name ?? 'missing theme';
+  const layoutName = (id: string) => state.config.layouts[id]?.name ?? 'missing layout';
+  return page('Workspaces', 'A workspace keeps your theme, layout, performance profile and which plugins are on, with their settings. Switch here or from the tray icon.',
+    rows(row('Save the current setup', 'Saving under a name that exists updates that workspace.', h('span', { style: 'display:flex;gap:8px' }, name, btn('Save', save, 'primary sm')))),
+    h('h2', {}, 'Saved workspaces'),
+    ws.length
+      ? rows(...ws.map((w) => row(w.name, `${themeName(w.themeId)} · ${layoutName(w.layoutId)} · ${w.profile} · ${w.plugins} plugin${w.plugins === 1 ? '' : 's'} on`,
+        h('span', { style: 'display:flex;gap:8px' },
+          btn('Switch', () => call('workspaces:apply', w.id).then((n) => toast(`Switched to “${n}”`)), 'primary sm'),
+          btn('Delete', async () => { if (await askConfirm('Delete workspace', `“${w.name}” will be removed. Your current settings stay as they are.`, 'Delete', true)) await call('workspaces:delete', w.id); }, 'ghost danger sm')))))
+      : h('div', { class: 'empty' }, 'No workspace yet. Set things up the way you like, then save them here.'));
+}, () => pluginOn('workspaceProfiles'));
 
 // ---- Shortcuts ----
 sect('shortcuts', 'Shortcuts', 'Client', 'hotkey keybind keys keyboard escape', () => page('Shortcuts', 'These work while the Discord window is focused.',
@@ -783,7 +842,7 @@ function buildNav() {
 
 function filterNav(): Section[] {
   const q = ($('#search') as HTMLInputElement).value.trim().toLowerCase();
-  const visible = sections.filter((s) => match(s, q));
+  const visible = sections.filter((s) => (s.visible?.() ?? true) && match(s, q));
   document.querySelectorAll<HTMLElement>('#nav .nav-item').forEach((el) => { el.hidden = !visible.some((s) => s.id === el.dataset.id); });
   document.querySelectorAll<HTMLElement>('#nav [data-group]').forEach((el) => { el.hidden = !!q || !visible.some((s) => s.group === el.dataset.group); });
   $('#nav .nav-empty').hidden = visible.length > 0;

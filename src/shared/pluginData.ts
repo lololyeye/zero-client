@@ -1,16 +1,18 @@
 /**
  * Data kept by built-in plugins across restarts (reminders, saved messages, notes, text snippets).
  *
- * The Discord page can only write the PAGE_DATA_PLUGINS documents (stream presets are written by ZERO's own screen
- * picker only), and every write goes through the sanitizers below:
+ * The Discord page can only write the PAGE_DATA_PLUGINS documents (stream presets, downloads and workspaces are written by ZERO itself
+ * only), and every write goes through the sanitizers below:
  * fixed fields, plain strings with length limits, ids made of digits, Discord CDN links only, and a cap on the
  * number of entries. Nothing here is code, and nothing here is ever account data (no tokens, no cookies).
  */
+import { sanitizeBuiltins, type BuiltinState } from './builtins';
+import { sanitizePerfOptions, toPerfProfile, type PerfOptions, type PerfProfile } from './config';
 
-export const DATA_PLUGINS = ['messageReminder', 'smartBookmarks', 'quickNotes', 'smartText', 'voiceAnalytics', 'micStudio', 'streamPresets'] as const;
+export const DATA_PLUGINS = ['messageReminder', 'smartBookmarks', 'quickNotes', 'smartText', 'voiceAnalytics', 'micStudio', 'messageStats', 'streamPresets', 'downloadManager', 'workspaceProfiles'] as const;
 export type DataPlugin = (typeof DATA_PLUGINS)[number];
-/** What the Discord page may write. streamPresets is written only by ZERO's screen picker. */
-export const PAGE_DATA_PLUGINS = ['messageReminder', 'smartBookmarks', 'quickNotes', 'smartText', 'voiceAnalytics', 'micStudio'] as const;
+/** What the Discord page may write. streamPresets, downloadManager and workspaceProfiles are written only by ZERO. */
+export const PAGE_DATA_PLUGINS = ['messageReminder', 'smartBookmarks', 'quickNotes', 'smartText', 'voiceAnalytics', 'micStudio', 'messageStats'] as const;
 export type PageDataPlugin = (typeof PAGE_DATA_PLUGINS)[number];
 export const isDataPlugin = (id: unknown): id is PageDataPlugin => typeof id === 'string' && (PAGE_DATA_PLUGINS as readonly string[]).includes(id);
 
@@ -51,6 +53,18 @@ export interface MicProfile {
 export interface StreamSource { kind: 'screen' | 'window'; source: string; audio: boolean }
 export interface StreamPreset extends StreamSource { id: string; name: string }
 
+/** MessageStatistics: counts only. */
+export interface StatDay { day: string; sent: number; dms: number; mentions: number }
+export interface MessageStats { since: number; days: StatDay[]; channels: { id: string; count: number }[] }
+/** DownloadManager (written by ZERO's main process only; the page never sees the path). */
+export interface Download { id: string; name: string; bytes: number; state: 'done' | 'failed' | 'cancelled'; at: number; path: string }
+/** WorkspaceProfiles (written by ZERO's main process only). */
+export interface Workspace {
+  id: string; name: string; themeId: string; layoutId: string;
+  perf: { profile: PerfProfile; custom: PerfOptions };
+  builtins: Record<string, BuiltinState>;
+}
+
 export interface PluginData {
   messageReminder: { reminders: Reminder[] };
   smartBookmarks: { collections: string[]; items: Bookmark[] };
@@ -59,6 +73,9 @@ export interface PluginData {
   voiceAnalytics: { calls: CallSummary[] };
   micStudio: { profiles: MicProfile[] };
   streamPresets: { presets: StreamPreset[]; last: StreamSource | null };
+  messageStats: MessageStats;
+  downloadManager: { items: Download[] };
+  workspaceProfiles: { profiles: Workspace[] };
 }
 
 const SNOWFLAKE = /^\d{15,22}$/;
@@ -182,6 +199,33 @@ function streamPreset(x: any): StreamPreset | null {
   return s && pid && name ? { ...s, id: pid, name } : null;
 }
 
+const count = (v: unknown): number => Math.round(clampNum(v, 0, 1e9, 0));
+function statDay(x: any): StatDay | null {
+  const day = typeof x?.day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(x.day) ? x.day : null;
+  return day ? { day, sent: count(x?.sent), dms: count(x?.dms), mentions: count(x?.mentions) } : null;
+}
+function messageStats(r: any): MessageStats {
+  // newest days first, one entry per day
+  const days = list(r?.days, 400, statDay).sort((a, b) => b.day.localeCompare(a.day)).filter((d, i, a) => i === 0 || a[i - 1]!.day !== d.day).slice(0, 120);
+  const channels = list(r?.channels, 500, (x) => (snow(x?.id) ? { id: x.id as string, count: count(x?.count) } : null))
+    .sort((a, b) => b.count - a.count).slice(0, 100);
+  return { since: time(r?.since, 0), days, channels };
+}
+function download(x: any): Download | null {
+  const did = id(x?.id); const name = line(x?.name, 260); const p = line(x?.path, 1000);
+  if (!did || !name || !p) return null;
+  const state = x?.state === 'failed' || x?.state === 'cancelled' ? x.state : 'done';
+  return { id: did, name, bytes: Math.round(clampNum(x?.bytes, 0, 1e13, 0)), state, at: time(x?.at, Date.now()), path: p };
+}
+function workspace(x: any): Workspace | null {
+  const wid = id(x?.id); const name = line(x?.name, 40);
+  const themeId = line(x?.themeId, 80); const layoutId = line(x?.layoutId, 40);
+  if (!wid || !name || !themeId || !layoutId) return null;
+  const all = sanitizeBuiltins(x?.builtins);
+  delete all.workspaceProfiles; // switching workspaces never turns this plugin off
+  return { id: wid, name, themeId, layoutId, perf: { profile: toPerfProfile(x?.perf?.profile), custom: sanitizePerfOptions(x?.perf?.custom) }, builtins: all };
+}
+
 export function emptyData<K extends DataPlugin>(k: K): PluginData[K] {
   const e: PluginData = {
     messageReminder: { reminders: [] },
@@ -191,6 +235,9 @@ export function emptyData<K extends DataPlugin>(k: K): PluginData[K] {
     voiceAnalytics: { calls: [] },
     micStudio: { profiles: [] },
     streamPresets: { presets: [], last: null },
+    messageStats: { since: 0, days: [], channels: [] },
+    downloadManager: { items: [] },
+    workspaceProfiles: { profiles: [] },
   };
   return e[k];
 }
@@ -216,6 +263,9 @@ export function sanitizeData<K extends DataPlugin>(k: K, raw: unknown): PluginDa
     case 'voiceAnalytics': return { calls: list(r.calls, 200, call) } as PluginData[K];
     case 'micStudio': return { profiles: list(r.profiles, 20, micProfile) } as PluginData[K];
     case 'streamPresets': return { presets: list(r.presets, 20, streamPreset), last: streamSource(r.last) } as PluginData[K];
+    case 'messageStats': return messageStats(r) as PluginData[K];
+    case 'downloadManager': return { items: list(r.items, 100, download) } as PluginData[K];
+    case 'workspaceProfiles': return { profiles: list(r.profiles, 20, workspace) } as PluginData[K];
   }
   return emptyData(k);
 }

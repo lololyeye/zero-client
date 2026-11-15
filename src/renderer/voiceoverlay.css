@@ -1,0 +1,13 @@
+html, body { margin: 0; background: transparent; overflow: hidden; user-select: none; }
+body { font: 600 14px "gg sans", "Segoe UI", system-ui, sans-serif; color: #f2f3f5; --row: 28px; }
+body.small { font-size: 12px; --row: 22px; }
+body.large { font-size: 17px; --row: 36px; }
+.box { margin: 4px; padding: 4px 6px; border-radius: 10px; background: rgba(17, 18, 20, .72); }
+.head { height: var(--row); line-height: var(--row); padding: 0 4px; font-size: .8em; color: #b5bac1; text-transform: uppercase; letter-spacing: .03em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+ul { list-style: none; margin: 0; padding: 0; }
+li { display: flex; align-items: center; gap: 8px; height: var(--row); padding: 0 4px; white-space: nowrap; }
+li .dot { flex: none; width: .62em; height: .62em; border-radius: 50%; background: #4e5058; transition: background .08s, box-shadow .08s; }
+li.speaking .dot { background: #23a55a; box-shadow: 0 0 0 3px rgba(35, 165, 90, .35); }
+li .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 2px #000; }
+li.me .name { color: #c9cdfb; }
+li .flag { flex: none; font-size: .78em; color: #f23f43; }

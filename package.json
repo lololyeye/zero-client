@@ -1,7 +1,7 @@
 {
   "name": "zero-client",
   "productName": "ZERO",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "ZERO - a personalized, performance-focused desktop client for the Discord web app",
   "main": "dist/main/index.js",
   "license": "MIT",

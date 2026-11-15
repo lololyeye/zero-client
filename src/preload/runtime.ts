@@ -4,7 +4,9 @@
  * its own body. It has no access to ZERO's IPC, files or settings storage: it only receives the list of enabled
  * plugins (and the detected game, and the saved data of the plugins that keep some) as a JSON string event from
  * ZERO's isolated preload. It can only ask for a page reload, bring the window to the front, or hand back its own
- * plugin data (validated and size-capped by ZERO). It never reads tokens, cookies or credentials. While no plugin is enabled it does nothing at all.
+ * plugin data (validated and size-capped by ZERO), and hand ZERO the few requests its plugins need (a translation, a
+ * download action, the side panel, the voice overlay list), each checked again by ZERO. It never reads tokens,
+ * cookies or credentials. While no plugin is enabled it does nothing at all.
  */
 export function zeroRuntime(): void {
   const W = window as any;
@@ -141,7 +143,7 @@ export function zeroRuntime(): void {
     deferred = false; schedule();
   });
   // Changes inside ZERO's own elements (the call timer ticking every second...) must not re-run every DOM task.
-  const OWN = '.zero-calltimer,.zero-pi,.zero-edit,.zero-menu,.zero-gat,.zero-ui,.zero-hubbtn';
+  const OWN = '.zero-calltimer,.zero-pi,.zero-edit,.zero-menu,.zero-gat,.zero-ui,.zero-hubbtn,.zero-splitbtn';
   const own = (n: Node): boolean => !!(n.nodeType === 1 ? (n as Element) : n.parentElement)?.closest(OWN);
   function onMutations(records: MutationRecord[]): void {
     for (const r of records) if (!own(r.target)) { schedule(); return; }
@@ -728,7 +730,7 @@ export function zeroRuntime(): void {
   let hub: HTMLElement | null = null; let hubTab = ''; let shownTab = '';
   /** the tab on screen is going away (switch, close, plugin off): its live updates and mic test stop */
   const leaveTab = () => { const t = tabs.get(shownTab); shownTab = ''; try { t?.leave?.(); } catch { /* ignore */ } };
-  const TAB_ORDER = ['messageReminder', 'smartBookmarks', 'quickNotes', 'smartText', 'connectionDoctor', 'voiceAnalytics', 'micStudio'];
+  const TAB_ORDER = ['zeroDashboard', 'messageReminder', 'smartBookmarks', 'quickNotes', 'smartText', 'clipboardManager', 'messageStats', 'downloadManager', 'connectionDoctor', 'voiceAnalytics', 'micStudio'];
   const HUB_CSS = [
     '.zero-ui{font-family:var(--font-primary,"gg sans","Segoe UI",sans-serif);color:var(--text-normal,#dbdee1);font-size:14px;line-height:1.35}',
     '.zero-ui input,.zero-ui textarea,.zero-ui select{font:inherit;color:inherit;background:var(--input-background,#1e1f22);border:1px solid var(--border-subtle,rgba(255,255,255,.08));border-radius:6px;padding:7px 9px;outline:none;min-width:0}',
@@ -757,7 +759,7 @@ export function zeroRuntime(): void {
     '.zero-thumbs{display:flex;gap:6px;flex-wrap:wrap}.zero-thumbs img{width:64px;height:64px;object-fit:cover;border-radius:6px;background:#0003}',
     '.zero-tag{display:inline-block;padding:1px 7px;border-radius:10px;background:var(--background-modifier-accent,rgba(255,255,255,.08));font-size:12px}',
     '.zero-empty{color:var(--text-muted,#949ba4);text-align:center;padding:24px 8px}',
-    '.zero-hubbtn{width:24px;height:24px;margin:0 8px;display:inline-grid;place-items:center;border:0;padding:0;background:none;color:var(--interactive-normal,#b5bac1);cursor:pointer;flex:none}.zero-hubbtn:hover,.zero-hubbtn[aria-pressed="true"]{color:var(--interactive-hover,#dbdee1)}',
+    '.zero-hubbtn,.zero-splitbtn{width:24px;height:24px;margin:0 8px;display:inline-grid;place-items:center;border:0;padding:0;background:none;color:var(--interactive-normal,#b5bac1);cursor:pointer;flex:none}.zero-hubbtn:hover,.zero-hubbtn[aria-pressed="true"],.zero-splitbtn:hover,.zero-splitbtn[aria-pressed="true"]{color:var(--interactive-hover,#dbdee1)}',
   ].join('');
   function renderHub(): void {
     if (!hub) return;
@@ -798,6 +800,7 @@ export function zeroRuntime(): void {
     const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', HUB_ICON); p.setAttribute('fill', 'currentColor'); svg.append(p); b.append(svg);
     const search = bar.querySelector(':scope > [class*="search_"]');
     if (search) search.before(b); else bar.append(b);
+    bar.querySelector(':scope > .zero-splitbtn')?.after(b);
     syncHubButtons();
   };
   const hubKey = (e: KeyboardEvent) => {
@@ -814,7 +817,7 @@ export function zeroRuntime(): void {
     if (tabs.size) { if (hub) renderHub(); return; }
     closeHub(); closePopup(); removeDom(hubButtonPass); document.removeEventListener('keydown', hubKey, true);
     document.querySelectorAll('.zero-hubbtn').forEach((e) => e.remove());
-    if (!menuItems.size) setCss('zeroHub', null);
+    if (!menuItems.size && !document.querySelector('.zero-splitbtn')) setCss('zeroHub', null);
   }
   const ensureUiCss = () => setCss('zeroHub', HUB_CSS);
   function messageCard(r: any, extra: Node[], actions: Node[]): HTMLElement {
@@ -1216,7 +1219,6 @@ export function zeroRuntime(): void {
   // ================================================================== PrivacyMode
   {
     let s: Settings = {}; let on = false; let badge: HTMLElement | null = null; let watch = 0; let auto = false;
-    const NativeN: any = (window as any).Notification;
     function css(): string {
       const blur = 'filter:blur(7px)!important;';
       const sel: string[] = [];
@@ -1241,10 +1243,10 @@ export function zeroRuntime(): void {
       }
     }
     // While privacy mode is on, desktop notifications show no name and no text.
-    function Wrapped(this: any, title: string, opts?: NotificationOptions) {
-      if (on && s.notifications) return new NativeN('Discord', { ...opts, body: 'New notification', icon: undefined, image: undefined } as any);
-      return new NativeN(title, opts);
-    }
+    const anonymize = (n: { title: string; opts: any }): boolean => {
+      if (on && s.notifications) { n.title = 'Discord'; n.opts = { ...n.opts, body: 'New notification', icon: undefined, image: undefined }; }
+      return true;
+    };
     const key = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.code === 'KeyH') { e.preventDefault(); e.stopPropagation(); set(!on, 'key'); }
     };
@@ -1258,16 +1260,13 @@ export function zeroRuntime(): void {
         s = next;
         setCss('privacyMode', css());
         document.addEventListener('keydown', key, true);
-        if (NativeN && s.notifications) {
-          Object.setPrototypeOf(Wrapped, NativeN); (Wrapped as any).prototype = NativeN.prototype;
-          (window as any).Notification = Wrapped;
-        }
+        if (s.notifications) notifyHook('privacyMode', anonymize);
         if (s.autoStream) { streamCheck(); watch = window.setInterval(streamCheck, 2000); }
       },
       stop() {
         clearInterval(watch);
         document.removeEventListener('keydown', key, true);
-        if ((window as any).Notification === Wrapped) (window as any).Notification = NativeN;
+        notifyHook('privacyMode', null);
         set(false, 'key'); setCss('privacyMode', null);
       },
     };
@@ -1675,6 +1674,503 @@ export function zeroRuntime(): void {
     plugins.smartAudioFocus = {
       start(next) { s = next; HTMLMediaElement.prototype.play = play; },
       stop() { if (HTMLMediaElement.prototype.play === play) HTMLMediaElement.prototype.play = origPlay; },
+    };
+  }
+
+  // ---- desktop notifications: one wrapper, shared by NotificationProfiles (may hold one back) and PrivacyMode
+  // (may hide its text). Installed only while one of them is on.
+  const NativeNotification: any = W.Notification;
+  type NotifyHook = (n: { title: string; opts: any }) => boolean; // false: the popup is held back
+  const notifyHooks = new Map<string, NotifyHook>();
+  const NOTIFY_ORDER = ['notificationProfiles', 'privacyMode'];
+  function ZeroNotification(this: any, title: string, opts?: any): any {
+    const n = { title: String(title ?? ''), opts: opts && typeof opts === 'object' ? { ...opts } : {} };
+    for (const id of NOTIFY_ORDER) {
+      const fn = notifyHooks.get(id);
+      let keep = true;
+      try { keep = !fn || fn(n) !== false; } catch { /* a plugin error never loses a notification */ }
+      if (!keep) return { close() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent: () => false, onclick: null, onclose: null, onerror: null, onshow: null };
+    }
+    return new NativeNotification(n.title, n.opts);
+  }
+  function notifyHook(id: string, fn: NotifyHook | null): void {
+    if (fn) notifyHooks.set(id, fn); else notifyHooks.delete(id);
+    if (!NativeNotification) return;
+    if (notifyHooks.size && W.Notification !== ZeroNotification) {
+      Object.setPrototypeOf(ZeroNotification, NativeNotification); (ZeroNotification as any).prototype = NativeNotification.prototype;
+      W.Notification = ZeroNotification;
+    } else if (!notifyHooks.size && W.Notification === ZeroNotification) W.Notification = NativeNotification;
+  }
+
+  // ================================================================== chat, tools and overlay plugins
+  // (ChatFilters, MessageStatistics, DownloadManager, ClipboardManager, InlineTranslator, NotificationProfiles,
+  // VoiceOverlay, MultiPanel, ZERO Dashboard)
+
+  /** Puts text in the message box like a paste. Nothing is sent: the user still presses Enter. */
+  function insertIntoComposer(text: string): boolean {
+    const a = document.activeElement as HTMLElement | null;
+    const target = a?.matches?.('[role="textbox"][contenteditable="true"]') ? a
+      : document.querySelector<HTMLElement>('main [role="textbox"][contenteditable="true"], [class*="channelTextArea_"] [role="textbox"][contenteditable="true"]');
+    if (!target) { toast('Click in a message box first.'); return false; }
+    target.focus();
+    const dt = new DataTransfer(); dt.setData('text/plain', text);
+    const ok = target.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    if (ok) document.execCommand('insertText', false, text);
+    return true;
+  }
+  const sectionTitle = (text: string) => el('div', { class: 'zero-muted', style: 'font-weight:700;text-transform:uppercase', text });
+  const fmtBytes = (b: number) => (b >= 1073741824 ? (b / 1073741824).toFixed(1) + ' GB' : b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : b >= 1024 ? Math.round(b / 1024) + ' KB' : b + ' B');
+
+  // ================================================================== ChatFilters
+  {
+    let s: Settings = {}; let words: string[] = []; let people = new Set<string>(); let sig = '';
+    const opened = new Set<string>(); // folded messages the user clicked open
+    const seen = new WeakMap<Element, string>();
+    function matches(msg: any, guildId: string | null): boolean {
+      const a = msg.author ?? {};
+      const mine = me();
+      if (a.id && a.id === mine) return false;
+      if (s.keepMentions && mine && (msg.mentions ?? []).some((u: any) => (u?.id ?? u) === mine)) return false;
+      if (s.bots && a.bot) return true;
+      if (people.size) {
+        const nick = guildId && a.id ? store('GuildMemberStore')?.getNick?.(guildId, a.id) : null;
+        if ([a.id, a.username, a.globalName ?? a.global_name, nick].some((x) => x && people.has(String(x).toLowerCase()))) return true;
+      }
+      if (words.length) {
+        const text = (String(msg.content ?? '') + '\n' + (msg.embeds ?? []).map((e: any) => [e.rawTitle ?? e.title, e.rawDescription ?? e.description].filter(Boolean).join(' ')).join('\n')).toLowerCase();
+        if (words.some((w) => text.includes(w))) return true;
+      }
+      return false;
+    }
+    const pass = () => {
+      const M = store('MessageStore'); const C = store('ChannelStore');
+      for (const li of document.querySelectorAll<HTMLElement>('li[id^="chat-messages-"]')) {
+        const m = /^chat-messages-(\d+)-(\d+)$/.exec(li.id);
+        if (!m) continue;
+        const msg = M?.getMessage?.(m[1], m[2]);
+        const key = li.id + sig + (msg ? `${msg.editedTimestamp ?? ''}|${String(msg.content ?? '').length}` : '-') + (opened.has(m[2]!) ? '+' : '');
+        if (seen.get(li) === key) continue;
+        seen.set(li, key);
+        const hit = !!msg && !opened.has(m[2]!) && matches(msg, C?.getChannel?.(m[1])?.guild_id ?? null);
+        if (hit) li.setAttribute('data-zero-filter', String(s.mode)); else li.removeAttribute('data-zero-filter');
+      }
+    };
+    const open = (e: MouseEvent) => {
+      const li = (e.target as Element | null)?.closest?.('li[data-zero-filter="collapse"]');
+      const m = li && /^chat-messages-\d+-(\d+)$/.exec(li.id);
+      if (!m) return;
+      e.preventDefault(); e.stopPropagation();
+      opened.add(m[1]!); li!.removeAttribute('data-zero-filter');
+    };
+    plugins.chatFilters = {
+      start(next) {
+        s = next; sig = JSON.stringify(next);
+        words = (s.words ?? []).map((w: string) => w.trim().toLowerCase()).filter(Boolean);
+        people = new Set((s.people ?? []).map((w: string) => w.trim().replace(/^@/, '').toLowerCase()).filter(Boolean));
+        setCss('chatFilters', 'li[data-zero-filter="hide"]{display:none!important}'
+          + 'li[data-zero-filter="dim"]{opacity:.3;transition:opacity .15s}li[data-zero-filter="dim"]:hover{opacity:1}'
+          + 'li[data-zero-filter="collapse"]>*{display:none!important}'
+          + 'li[data-zero-filter="collapse"]::before{content:"Filtered message · click to show";display:block;width:max-content;margin:2px 16px 2px 72px;padding:2px 8px;border-radius:4px;font-size:12px;color:var(--text-muted,#949ba4);background:var(--background-modifier-hover,rgba(255,255,255,.05));cursor:pointer}');
+        addDom(pass);
+        document.addEventListener('click', open, true);
+      },
+      stop() {
+        removeDom(pass); document.removeEventListener('click', open, true); opened.clear();
+        for (const li of document.querySelectorAll('li[data-zero-filter]')) { li.removeAttribute('data-zero-filter'); seen.delete(li); }
+        setCss('chatFilters', null);
+      },
+    };
+  }
+
+  // ================================================================== MessageStatistics
+  {
+    const D = () => (pdata.messageStats ??= { since: 0, days: [], channels: [] }) as { since: number; days: any[]; channels: any[] };
+    let off: (() => void) | null = null;
+    const dayKey = (t: Date) => `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+    function dayOf(key: string): any {
+      const d = D();
+      let x = d.days.find((y) => y.day === key);
+      if (!x) {
+        x = { day: key, sent: 0, dms: 0, mentions: 0 };
+        d.days.unshift(x); d.days.sort((a, b) => b.day.localeCompare(a.day));
+        if (d.days.length > 120) d.days.length = 120;
+      }
+      return x;
+    }
+    const onMessage = (a: any) => {
+      const m = a?.message;
+      if (!m || a.optimistic || !m.author) return;
+      const mine = me();
+      if (!mine) return;
+      const chId = String(a.channelId ?? m.channel_id ?? '');
+      const today = dayOf(dayKey(new Date()));
+      if (m.author.id === mine) {
+        today.sent++;
+        if (/^\d{15,22}$/.test(chId)) {
+          const d = D();
+          let c = d.channels.find((x) => x.id === chId);
+          if (!c) { c = { id: chId, count: 0 }; d.channels.push(c); }
+          c.count++;
+          d.channels.sort((x, y) => y.count - x.count);
+          if (d.channels.length > 100) d.channels.length = 100;
+        }
+      } else {
+        const ch = store('ChannelStore')?.getChannel?.(chId);
+        if (ch && (ch.type === 1 || ch.type === 3)) today.dms++;
+        else if ((m.mentions ?? []).some((u: any) => (u?.id ?? u) === mine)) today.mentions++;
+        else return;
+      }
+      saveData('messageStats');
+      refreshHub('messageStats');
+      refreshHub('zeroDashboard');
+    };
+    const total = (n: number, k: 'sent' | 'dms' | 'mentions') => {
+      const from = new Date(); from.setDate(from.getDate() - n + 1);
+      const min = dayKey(from);
+      return D().days.filter((x) => x.day >= min).reduce((a, x) => a + x[k], 0);
+    };
+    const render = (host: HTMLElement) => {
+      const d = D();
+      const t = dayOf(dayKey(new Date()));
+      const stat = (label: string, v: number) => el('div', { class: 'zero-card', style: 'flex:1;align-items:center;gap:2px' }, el('b', { style: 'font-size:20px', text: String(v) }), el('span', { class: 'zero-muted', text: label }));
+      host.append(
+        sectionTitle('Today'),
+        el('div', { class: 'zero-row' }, stat('sent', t.sent), stat('DMs received', t.dms), stat('mentions', t.mentions)),
+        el('div', { class: 'zero-muted', text: `Last 7 days: ${total(7, 'sent')} sent, ${total(7, 'dms')} DMs, ${total(7, 'mentions')} mentions. Last 30 days: ${total(30, 'sent')} sent.` }));
+      // the last 14 days of sent messages
+      const days: { key: string; v: number; label: string }[] = [];
+      for (let i = 13; i >= 0; i--) {
+        const x = new Date(); x.setDate(x.getDate() - i);
+        const k = dayKey(x);
+        days.push({ key: k, v: d.days.find((y) => y.day === k)?.sent ?? 0, label: x.toLocaleDateString([], { weekday: 'short', day: 'numeric' }) });
+      }
+      const max = Math.max(1, ...days.map((x) => x.v));
+      host.append(sectionTitle('Messages sent, last 14 days'),
+        el('div', { class: 'zero-card', style: 'flex-direction:row;align-items:flex-end;gap:3px;height:110px', role: 'img', 'aria-label': 'Messages sent per day' },
+          ...days.map((x) => el('div', { title: `${x.label}: ${x.v}`, style: `flex:1;min-width:0;height:${Math.max(2, Math.round((x.v / max) * 90))}px;border-radius:3px 3px 0 0;background:${x.key === t.day ? 'var(--brand-500,#5865f2)' : 'var(--background-modifier-accent,rgba(255,255,255,.18))'}` }))));
+      const C = store('ChannelStore');
+      const top = d.channels.slice(0, 5);
+      host.append(sectionTitle('Where you write most'));
+      if (!top.length) host.append(el('div', { class: 'zero-empty', style: 'padding:8px', text: 'Nothing counted yet.' }));
+      for (const c of top) host.append(el('div', { class: 'zero-row' }, el('span', { style: 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', text: placeName({ guildId: C?.getChannel?.(c.id)?.guild_id ?? null, channelId: c.id }) }), el('b', { text: String(c.count) })));
+      host.append(el('div', { class: 'zero-row' },
+        el('span', { class: 'zero-muted', style: 'flex:1', text: d.since ? 'Counting since ' + new Date(d.since).toLocaleDateString() + '. Numbers only, never message text.' : '' }),
+        el('button', { type: 'button', class: 'zero-btn small ghost', text: 'Reset', onclick: () => { pdata.messageStats = { since: Date.now(), days: [], channels: [] }; saveData('messageStats'); renderHub(); } })));
+    };
+    plugins.messageStats = {
+      start() {
+        if (!D().since) { D().since = Date.now(); saveData('messageStats'); }
+        off = on('MESSAGE_CREATE', onMessage);
+        ensureUiCss(); addTab('messageStats', { label: 'Stats', render });
+      },
+      stop() { off?.(); off = null; removeTab('messageStats'); },
+    };
+  }
+
+  // ================================================================== DownloadManager (the files are handled by ZERO itself)
+  {
+    let items: any[] = [];
+    const ask = (action: string, id = '') => document.dispatchEvent(new CustomEvent('zero:dl-act', { detail: action + '\n' + id }));
+    const onList = (e: Event) => {
+      try { const v = JSON.parse(String((e as CustomEvent).detail)); items = Array.isArray(v) ? v : []; } catch { items = []; }
+      refreshHub('downloadManager');
+    };
+    const STATE: Record<string, string> = { done: 'Done', failed: 'Failed', cancelled: 'Cancelled', interrupted: 'Interrupted', progressing: 'Downloading', missing: 'File moved or deleted' };
+    const render = (host: HTMLElement) => {
+      host.append(el('div', { class: 'zero-row' },
+        el('span', { class: 'zero-muted', style: 'flex:1', text: items.length ? items.length + ' file' + (items.length > 1 ? 's' : '') : '' }),
+        el('button', { type: 'button', class: 'zero-btn small', text: 'Open folder', onclick: () => ask('folder') }),
+        items.length ? el('button', { type: 'button', class: 'zero-btn small ghost', text: 'Clear list', onclick: () => ask('clear') }) : null));
+      if (!items.length) { host.append(el('div', { class: 'zero-empty', text: 'Files you download from Discord show up here.' })); return; }
+      for (const d of items) {
+        const pct = d.state === 'progressing' && d.bytes ? Math.floor((d.received / d.bytes) * 100) : null;
+        host.append(el('div', { class: 'zero-card' },
+          el('div', { class: 'zero-card-head' }, el('b', { style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0', text: String(d.name) }), el('span', { class: 'zero-sp', text: when(Number(d.at)) })),
+          el('div', { class: 'zero-muted', text: (STATE[d.state] ?? d.state) + (pct !== null ? ' ' + pct + '%' : '') + (d.bytes ? ' · ' + fmtBytes(Number(d.bytes)) : '') }),
+          pct !== null ? el('div', { style: 'height:4px;border-radius:2px;background:rgba(255,255,255,.08)' }, el('div', { style: `height:100%;width:${pct}%;border-radius:2px;background:var(--brand-500,#5865f2)` })) : null,
+          el('div', { class: 'zero-actions' },
+            d.state === 'progressing' ? el('button', { type: 'button', class: 'zero-btn small danger', text: 'Cancel', onclick: () => ask('cancel', d.id) }) : null,
+            d.state === 'done' && d.canOpen ? el('button', { type: 'button', class: 'zero-btn small primary', text: 'Open', onclick: () => ask('open', d.id) }) : null,
+            d.state === 'done' ? el('button', { type: 'button', class: 'zero-btn small', text: 'Show in folder', onclick: () => ask('show', d.id) }) : null,
+            d.state !== 'progressing' ? el('button', { type: 'button', class: 'zero-btn small ghost', text: 'Remove from list', onclick: () => ask('remove', d.id) }) : null)));
+      }
+    };
+    plugins.downloadManager = {
+      start() { document.addEventListener('zero:dl', onList); ensureUiCss(); addTab('downloadManager', { label: 'Downloads', render }); ask('list'); },
+      stop() { document.removeEventListener('zero:dl', onList); items = []; removeTab('downloadManager'); },
+    };
+  }
+
+  // ================================================================== ClipboardManager (memory only)
+  {
+    let s: Settings = {}; let items: { text: string; at: number }[] = [];
+    const ClipProto: any = W.Clipboard?.prototype;
+    const origWriteText = ClipProto?.writeText;
+    function remember(t: unknown): void {
+      if (typeof t !== 'string' || !t.trim()) return;
+      const text = t.slice(0, 5000);
+      items = [{ text, at: Date.now() }, ...items.filter((x) => x.text !== text)].slice(0, Number(s.max) || 30);
+      refreshHub('clipboardManager');
+    }
+    const onCopy = () => {
+      const a = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
+      if (a && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && /^(text|search|url)$/i.test(a.type))) && a.selectionStart !== null && a.selectionEnd !== null && a.selectionEnd > a.selectionStart) {
+        remember(a.value.slice(a.selectionStart, a.selectionEnd)); return;
+      }
+      remember(String(getSelection() ?? ''));
+    };
+    function writeText(this: any, t: string): Promise<void> {
+      try { remember(t); } catch { /* ignore */ }
+      return origWriteText.call(this, t);
+    }
+    const copyAgain = (t: string) => {
+      const p = origWriteText ? origWriteText.call(navigator.clipboard, t) : Promise.reject(new Error('no clipboard'));
+      p.then(() => toast('Copied.', [], 2000), () => toast('Could not copy.'));
+    };
+    const render = (host: HTMLElement) => {
+      host.append(el('div', { class: 'zero-row' },
+        el('span', { class: 'zero-muted', style: 'flex:1', text: 'What you copied in ZERO, newest first. Kept in memory only.' }),
+        items.length ? el('button', { type: 'button', class: 'zero-btn small ghost', text: 'Clear', onclick: () => { items = []; renderHub(); } }) : null));
+      if (!items.length) { host.append(el('div', { class: 'zero-empty', text: 'Nothing copied yet.' })); return; }
+      for (const it of items) host.append(el('div', { class: 'zero-card' },
+        el('div', { class: 'zero-card-head' }, el('span', { text: it.text.length + ' characters' }), el('span', { class: 'zero-sp', text: when(it.at) })),
+        el('div', { class: 'zero-text', style: '-webkit-line-clamp:3', text: it.text }),
+        el('div', { class: 'zero-actions' },
+          el('button', { type: 'button', class: 'zero-btn small primary', text: 'Copy', onclick: () => copyAgain(it.text) }),
+          el('button', { type: 'button', class: 'zero-btn small', text: 'Insert', onclick: () => { closeHub(); insertIntoComposer(it.text); } }),
+          el('button', { type: 'button', class: 'zero-btn small ghost', text: 'Delete', onclick: () => { items = items.filter((x) => x !== it); renderHub(); } }))));
+    };
+    plugins.clipboardManager = {
+      start(next) {
+        s = next;
+        document.addEventListener('copy', onCopy, true);
+        if (s.menus && ClipProto && typeof origWriteText === 'function') ClipProto.writeText = writeText;
+        ensureUiCss(); addTab('clipboardManager', { label: 'Clipboard', render });
+      },
+      stop() {
+        document.removeEventListener('copy', onCopy, true);
+        if (ClipProto && ClipProto.writeText === writeText) ClipProto.writeText = origWriteText;
+        items = []; removeTab('clipboardManager');
+      },
+    };
+  }
+
+  // ================================================================== InlineTranslator (ZERO sends the text, see main/translate.ts)
+  {
+    let s: Settings = {}; let seq = 0;
+    const results = new Map<string, any>(); // message id -> 'busy' | { text, from } | { error }
+    const waiting = new Map<number, string>();
+    const LANG: Record<string, string> = { en: 'English', fr: 'French', es: 'Spanish', de: 'German', it: 'Italian', pt: 'Portuguese', nl: 'Dutch', pl: 'Polish', tr: 'Turkish', ru: 'Russian', uk: 'Ukrainian', ar: 'Arabic', ja: 'Japanese', ko: 'Korean', zh: 'Chinese', 'zh-cn': 'Chinese' };
+    const langName = (c: string) => LANG[c.toLowerCase()] ?? LANG[c.toLowerCase().split('-')[0]!] ?? c.toUpperCase();
+    function paintTranslations(): void {
+      for (const [mid, r] of results) {
+        const content = document.getElementById('message-content-' + mid);
+        if (!content) continue;
+        const sig = typeof r === 'string' ? r : JSON.stringify(r);
+        let box = content.parentElement?.querySelector<HTMLElement>(':scope > .zero-tr') ?? null;
+        if (box && box.dataset.sig === sig) continue;
+        if (!box) { box = el('div', { class: 'zero-ui zero-tr' }); content.after(box); }
+        box.dataset.sig = sig;
+        const close = el('button', { type: 'button', class: 'zero-x', 'aria-label': 'Hide translation', text: '×', onclick: (e: Event) => { e.stopPropagation(); results.delete(mid); box!.remove(); } });
+        if (r === 'busy') box.replaceChildren(el('span', { class: 'zero-muted', text: 'Translating…' }));
+        else if (r.error) box.replaceChildren(el('div', { class: 'zero-tr-head' }, el('span', { text: r.error }), close));
+        else box.replaceChildren(el('div', { class: 'zero-tr-head' }, el('span', { text: 'Translated from ' + langName(r.from || '?') + ' · MyMemory' }), close), el('div', { text: r.text }));
+      }
+    }
+    const onResult = (e: Event) => {
+      let r: any; try { r = JSON.parse(String((e as CustomEvent).detail)); } catch { return; }
+      const mid = waiting.get(r?.seq);
+      if (!mid) return;
+      waiting.delete(r.seq);
+      results.set(mid, r.error ? { error: String(r.error).slice(0, 200) } : { text: String(r.text ?? '').slice(0, 2000), from: String(r.from ?? '').slice(0, 10) });
+      paintTranslations();
+    };
+    function translate(ref: { channelId: string; messageId: string }): void {
+      const msg = store('MessageStore')?.getMessage?.(ref.channelId, ref.messageId);
+      // Markdown marks (headings, bold, quotes, spoilers) are left out: only the words are translated.
+      const text = String(msg?.content ?? '').replace(/^[ \t]{0,3}(?:#{1,3}|-#|>{1,3})[ \t]+/gm, '').replace(/\*\*|__|~~|\|\|/g, '').trim();
+      if (!text) { toast('This message has no text to translate.'); return; }
+      if (results.get(ref.messageId) === 'busy') return;
+      const id = ++seq;
+      waiting.set(id, ref.messageId);
+      results.set(ref.messageId, 'busy');
+      paintTranslations();
+      document.dispatchEvent(new CustomEvent('zero:translate', { detail: JSON.stringify({ seq: id, text: text.slice(0, 500), to: s.to }) }));
+      window.setTimeout(() => { if (waiting.delete(id)) { results.set(ref.messageId, { error: 'The translation service did not answer.' }); paintTranslations(); } }, 15_000);
+      if (text.length > 500) toast('Only the first 500 characters are translated.');
+    }
+    plugins.inlineTranslator = {
+      start(next) {
+        s = next;
+        ensureUiCss();
+        setCss('inlineTranslator', '.zero-tr{margin:4px 0 2px;padding:6px 10px;border-left:3px solid var(--brand-500,#5865f2);border-radius:4px;background:var(--background-modifier-hover,rgba(255,255,255,.04));white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}.zero-tr-head{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted,#949ba4)}.zero-tr-head span{flex:1}');
+        document.addEventListener('zero:translated', onResult);
+        addMenu('inlineTranslator', [{ label: 'Translate', run: (ref) => translate(ref) }]);
+        addDom(paintTranslations);
+      },
+      stop() {
+        removeMenu('inlineTranslator'); removeDom(paintTranslations);
+        document.removeEventListener('zero:translated', onResult);
+        results.clear(); waiting.clear();
+        document.querySelectorAll('.zero-tr').forEach((x) => x.remove());
+        setCss('inlineTranslator', null);
+        if (!tabs.size && !menuItems.size) setCss('zeroHub', null);
+      },
+    };
+  }
+
+  // ================================================================== NotificationProfiles
+  {
+    let s: Settings = {}; let held = 0; let heldWhy = ''; let watch = 0;
+    function reason(): string | null {
+      const h = new Date().getHours(); const f = Number(s.from), t = Number(s.to);
+      if (s.quiet && f !== t && (f < t ? h >= f && h < t : h >= f || h < t)) return 'quiet hours';
+      if (s.streaming && store('ApplicationStreamingStore')?.getCurrentUserActiveStream?.()) return 'you were streaming';
+      if (s.gaming && game) return 'you were playing ' + game.name;
+      if (s.calls && voiceChannel()) return 'you were in a call';
+      return null;
+    }
+    const hold = (n: { title: string; opts: any }): boolean => {
+      if (String(n.opts?.tag ?? '').startsWith('zero-')) return true; // ZERO's own reminders always ring
+      const why = reason();
+      if (!why) return true;
+      const title = n.title.toLowerCase();
+      if ((s.allow ?? []).some((a: string) => a.trim() && title.includes(a.trim().toLowerCase()))) return true;
+      // Server messages are titled "Name (#channel, Server)"; direct and group messages are not.
+      if (s.dms && !/\(#[^)]*\)\s*$/.test(n.title)) return true;
+      held++; heldWhy = why;
+      return false;
+    };
+    const check = () => {
+      if (!held || reason()) return;
+      toast(`${held} notification${held > 1 ? 's were' : ' was'} held back while ${heldWhy}.`, [], 10_000);
+      held = 0;
+    };
+    plugins.notificationProfiles = {
+      start(next) { s = next; held = 0; notifyHook('notificationProfiles', hold); watch = window.setInterval(check, 30_000); },
+      stop() { clearInterval(watch); notifyHook('notificationProfiles', null); held = 0; },
+    };
+  }
+
+  // ================================================================== VoiceOverlay (ZERO draws the window, see main/voiceOverlay.ts)
+  {
+    let offs: (() => void)[] = []; let timer = 0; let poll = 0; let last = '';
+    function snapshot(): string {
+      const ch = voiceChannel();
+      if (!ch) return '';
+      const VS = store('VoiceStateStore'); const SP = store('SpeakingStore'); const U = store('UserStore'); const GM = store('GuildMemberStore');
+      const channel = store('ChannelStore')?.getChannel?.(ch);
+      const states = VS?.getVoiceStatesForChannel?.(ch) ?? {};
+      const mine = me();
+      const users = (Object.values(states) as any[]).slice(0, 25).map((v) => {
+        const uid = String(v?.userId ?? v?.user_id ?? '');
+        const u = U?.getUser?.(uid);
+        const name = (channel?.guild_id ? GM?.getNick?.(channel.guild_id, uid) : null) ?? u?.globalName ?? u?.username ?? 'Someone';
+        const speaking = uid === mine && typeof SP?.isCurrentUserSpeaking === 'function' ? !!SP.isCurrentUserSpeaking() : !!SP?.isSpeaking?.(uid);
+        return { name: String(name).slice(0, 32), speaking, mute: !!(v?.selfMute || v?.mute), deaf: !!(v?.selfDeaf || v?.deaf), me: uid === mine };
+      });
+      return JSON.stringify({ channel: String(channel?.name ?? 'Voice').slice(0, 60), users });
+    }
+    const send = () => {
+      timer = 0;
+      const snap = snapshot();
+      if (snap === last) return;
+      last = snap;
+      document.dispatchEvent(new CustomEvent('zero:voice', { detail: snap }));
+    };
+    const soon = () => { if (!timer) timer = window.setTimeout(send, 120); };
+    plugins.voiceOverlay = {
+      start() {
+        last = '-';
+        offs = ['SPEAKING', 'VOICE_STATE_UPDATES', 'VOICE_CHANNEL_SELECT', 'RTC_CONNECTION_STATE'].map((t) => on(t, soon));
+        poll = window.setInterval(soon, 2000);
+        send();
+      },
+      stop() {
+        for (const f of offs) f();
+        offs = []; clearInterval(poll); clearTimeout(timer); timer = 0;
+        last = ''; document.dispatchEvent(new CustomEvent('zero:voice', { detail: '' }));
+      },
+    };
+  }
+
+  // ================================================================== MultiPanel (the side panel is a second Discord page, opened by ZERO)
+  {
+    let open = '';
+    const ICON = 'M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v12h9V6H4Zm11 0v12h5V6h-5Z';
+    const sync = () => {
+      for (const b of document.querySelectorAll<HTMLElement>('.zero-splitbtn')) {
+        b.setAttribute('aria-pressed', String(!!open));
+        b.title = open ? 'Close the side panel' : 'Open this channel in a side panel';
+      }
+    };
+    const toggle = () => {
+      if (open) { document.dispatchEvent(new CustomEvent('zero:side', { detail: '' })); return; }
+      const path = location.pathname;
+      if (!/^\/channels\/(@me|\d{15,22})\/\d{15,22}$/.test(path)) { toast('Open a channel or a conversation first.'); return; }
+      document.dispatchEvent(new CustomEvent('zero:side', { detail: path }));
+    };
+    const onState = (e: Event) => { open = String((e as CustomEvent).detail ?? ''); sync(); };
+    const pass = () => {
+      const bar = document.querySelector('section[class*="title_"] [class*="toolbar_"]');
+      if (!bar || bar.querySelector(':scope > .zero-splitbtn')) return;
+      const b = el('button', { type: 'button', class: 'zero-splitbtn', 'aria-label': 'Side panel', onclick: toggle });
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '22'); svg.setAttribute('height', '22');
+      const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', ICON); p.setAttribute('fill', 'currentColor'); svg.append(p); b.append(svg);
+      const anchor = bar.querySelector(':scope > .zero-hubbtn') ?? bar.querySelector(':scope > [class*="search_"]');
+      if (anchor) anchor.before(b); else bar.append(b);
+      sync();
+    };
+    plugins.multiPanel = {
+      start() { ensureUiCss(); document.addEventListener('zero:side-state', onState); addDom(pass); document.dispatchEvent(new CustomEvent('zero:side', { detail: '?' })); },
+      stop() {
+        removeDom(pass); document.removeEventListener('zero:side-state', onState);
+        document.querySelectorAll('.zero-splitbtn').forEach((x) => x.remove());
+        if (open) document.dispatchEvent(new CustomEvent('zero:side', { detail: '' }));
+        open = '';
+        if (!tabs.size && !menuItems.size) setCss('zeroHub', null);
+      },
+    };
+  }
+
+  // ================================================================== ZERO Dashboard
+  {
+    const render = (host: HTMLElement) => {
+      const h = new Date().getHours();
+      const meU = store('UserStore')?.getCurrentUser?.();
+      host.append(el('div', { style: 'font-size:18px;font-weight:700', text: (h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening') + (meU ? ', ' + (meU.globalName ?? meU.username) : '') }));
+      let shown = 0;
+      const block = (id: string, title: string, body: (Node | null)[], more: string) => {
+        if (!tabs.has(id)) return;
+        shown++;
+        host.append(el('div', { class: 'zero-row' }, el('span', { style: 'flex:1' }, sectionTitle(title)), el('button', { type: 'button', class: 'zero-btn small ghost', text: more, onclick: () => openHub(id) })));
+        const items = body.filter(Boolean) as Node[];
+        host.append(...(items.length ? items : [el('div', { class: 'zero-muted', text: 'Nothing here yet.' })]));
+      };
+      if (tabs.has('messageStats')) {
+        const k = new Date(); const key = `${k.getFullYear()}-${String(k.getMonth() + 1).padStart(2, '0')}-${String(k.getDate()).padStart(2, '0')}`;
+        const t = pdata.messageStats?.days?.find((x: any) => x.day === key) ?? { sent: 0, dms: 0, mentions: 0 };
+        block('messageStats', 'Today', [el('div', { class: 'zero-muted', text: `${t.sent} sent · ${t.dms} DMs · ${t.mentions} mentions` })], 'Stats');
+      }
+      const rem = ((pdata.messageReminder?.reminders ?? []) as any[]).filter((r) => !r.done).sort((a, b) => a.due - b.due).slice(0, 3);
+      block('messageReminder', 'Next reminders', rem.map((r) => el('div', { class: 'zero-card', style: 'cursor:pointer', onclick: () => { closeHub(); jump(r); } },
+        el('div', { class: 'zero-card-head' }, el('b', { text: when(r.due) }), el('span', { text: placeName(r) })),
+        el('div', { class: 'zero-text', style: '-webkit-line-clamp:2', text: r.note || r.content || '(no text)' }))), 'All');
+      const bm = ((pdata.smartBookmarks?.items ?? []) as any[]).slice().sort((a, b) => b.saved - a.saved).slice(0, 3);
+      block('smartBookmarks', 'Recently saved', bm.map((b) => el('div', { class: 'zero-card', style: 'cursor:pointer', onclick: () => { closeHub(); jump(b); } },
+        el('div', { class: 'zero-card-head' }, el('b', { text: b.author }), el('span', { text: b.collection })),
+        el('div', { class: 'zero-text', style: '-webkit-line-clamp:2', text: b.content || '(attachment)' }))), 'All');
+      const notes = ((pdata.quickNotes?.notes ?? []) as any[]).slice().sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated - a.updated).slice(0, 2);
+      block('quickNotes', 'Notes', notes.map((n) => el('div', { class: 'zero-card' }, el('div', { class: 'zero-text', style: '-webkit-line-clamp:3', text: (n.pinned ? '📌 ' : '') + (n.text || '(empty)') }))), 'All');
+      const call = ((pdata.voiceAnalytics?.calls ?? []) as any[]).slice().sort((a, b) => b.end - a.end)[0];
+      block('voiceAnalytics', 'Last call', [call ? el('div', { class: 'zero-muted', text: `${call.place || 'Call'} · ${when(call.start)} · ${fmtDur(call.end - call.start)}${call.pingAvg !== null ? ' · ping ' + call.pingAvg + ' ms' : ''}${call.disconnects ? ' · ' + call.disconnects + ' drop(s)' : ''}` }) : null], 'History');
+      if (!shown) host.append(el('div', { class: 'zero-empty', text: 'Turn on MessageReminder, SmartBookmarks, QuickNotes, VoiceAnalytics or MessageStatistics in ZERO Settings › Plugins to fill this page.' }));
+      const others = [...tabs].filter(([id]) => id !== 'zeroDashboard');
+      if (others.length) host.append(sectionTitle('Open'), el('div', { class: 'zero-chips' }, ...others.map(([id, t]) => el('button', { type: 'button', class: 'zero-btn small', text: t.label, onclick: () => openHub(id) }))));
+    };
+    plugins.zeroDashboard = {
+      start() { ensureUiCss(); addTab('zeroDashboard', { label: 'Home', render }); },
+      stop() { removeTab('zeroDashboard'); },
     };
   }
 

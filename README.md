@@ -28,14 +28,20 @@ Custom themes and backgrounds that actually apply everywhere, with no restart ne
 - **Performance profiles:** Balanced, Lightweight or Custom. Each switch does something real.
 - **Safe Mode:** `Ctrl+Shift+Z` removes every customization instantly. ZERO also turns it on by itself after repeated failed starts.
 - **Backups:** settings are saved atomically with rolling backups, and a corrupted file is restored from the latest backup.
-- **Plugins:** CSS-only plugins with explicit permissions.
+- **Built-in plugins (31, all off by default):** browse them by category in Settings → Plugins. Among them:
+  - Chat: ChatFilters, InlineTranslator, MessageStatistics, MessageReminder, SmartBookmarks, SmartText, MessageLogger.
+  - Voice and streaming: ConnectionDoctor, VoiceAnalytics, MicStudio, SmartAudioFocus, StreamPresets, VoiceOverlay, CallTimer.
+  - Tools: ZERO Dashboard, MultiPanel (a second channel side by side), DownloadManager, ClipboardManager, QuickNotes.
+  - Appearance and privacy: ThemeStudio, WorkspaceProfiles, NotificationProfiles, PrivacyMode.
+  - `Ctrl+Shift+L` opens the ZERO panel inside Discord.
+- **Style add-ons:** CSS-only add-ons from your plugins folder, with explicit permissions.
 - **Streaming:** Go Live and watching streams work in ZERO. Pick a screen or an app window, and turn on **Share sound** to stream your PC's audio. Your voice call is left out of the stream, so viewers don't hear an echo.
 
 Shortcuts: `Ctrl+,` opens or closes ZERO settings, `Esc` closes them, `Ctrl+F` searches them, `Ctrl+Shift+Z` toggles Safe Mode.
 
 ## Privacy and safety
 
-ZERO never reads, stores or sends your Discord token or password. It does not automate your account and does not use Discord's API. It only restyles the page you see. The only network request ZERO makes on its own is the optional update check to GitHub.
+ZERO never reads, stores or sends your Discord token or password. It does not automate your account and does not use Discord's API. It only restyles the page you see. The only network request ZERO makes on its own is the optional update check to GitHub. A few plugins reach the network only while you turn them on: GameDetection downloads Discord's public list of games, and InlineTranslator sends the text of a message you choose to translate to the MyMemory translation service.
 
 ZERO is an independent project and is **not affiliated with Discord Inc.** Modified clients are a grey area under Discord's Terms of Service; use it at your own risk.
 

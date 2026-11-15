@@ -26,7 +26,11 @@ import { createOverlay } from './overlay';
 import { createGameDetector } from './games';
 import { activeBuiltins, BUILTINS, sanitizeBuiltin } from '../shared/builtins';
 import { PluginDataStore } from './pluginData';
-import { isDataPlugin, PAGE_DATA_PLUGINS, type PluginData } from '../shared/pluginData';
+import { isDataPlugin, PAGE_DATA_PLUGINS, type PluginData, type Workspace } from '../shared/pluginData';
+import { createDownloads } from './downloads';
+import { createTranslator } from './translate';
+import { createVoiceOverlay, type OverlaySettings } from './voiceOverlay';
+import { createSidePanel, SIDE_PATH } from './sidePanel';
 
 const APP_NAME = 'ZERO';
 const BRANCH_URL = { stable: 'https://discord.com/app', ptb: 'https://ptb.discord.com/app', canary: 'https://canary.discord.com/app' } as const;
@@ -165,6 +169,7 @@ function recompileAndPush() {
   }
   const wc = discordWin?.webContents;
   if (wc && !wc.isDestroyed()) { wc.send('zero:apply', payload()); theme.pushes++; theme.lastPushAt = Date.now(); }
+  sidePanel.restyle();
 }
 
 function applySpellcheck() {
@@ -211,6 +216,7 @@ function publicState() {
     config, plugins: plugins.infos, notes, compat, startupMs, safeMode: config.recovery.safeMode,
     version: app.getVersion(), electron: process.versions.electron, chrome: process.versions.chrome,
     pluginsDir: path.join(userData(), 'plugins'), perf, missingImages: [...theme.missing], update: updater?.state ?? null,
+    workspaces: pluginData && pluginOn('workspaceProfiles') ? pluginData.get('workspaceProfiles').profiles.map((p) => ({ id: p.id, name: p.name, themeId: p.themeId, layoutId: p.layoutId, profile: p.perf.profile, plugins: Object.values(p.builtins).filter((b) => b.enabled).length })) : [],
   };
 }
 function broadcast() { if (settingsView && !settingsView.webContents.isDestroyed()) settingsView.webContents.send('state:changed', publicState()); }
@@ -220,6 +226,7 @@ function commit(next: Config, opts: { broadcast?: boolean } = {}) {
   config = next;
   recompileAndPush();
   pushBuiltins();
+  pluginsChanged();
   saveSoon();
   if (opts.broadcast !== false) broadcast();
 }
@@ -248,6 +255,76 @@ function pushBuiltins(force = false) {
   if (wc && !wc.isDestroyed()) wc.send('zero:builtins', p);
 }
 const crashReloads: number[] = [];
+const pluginOn = (id: string) => !config.recovery.safeMode && config.builtins[id]?.enabled === true;
+
+// ---- plugins that ZERO itself runs a part of (the Discord page only asks)
+const translator = createTranslator();
+const downloads = createDownloads({
+  enabled: () => pluginOn('downloadManager'),
+  folder: () => (config.builtins.downloadManager?.settings.folder === 'downloads' ? 'downloads' : 'ask'),
+  data: { get: () => pluginData.get('downloadManager'), set: (d) => pluginData.set('downloadManager', d) },
+  send: (list) => { const wc = discordWin?.webContents; if (wc && !wc.isDestroyed()) wc.send('zero:downloads', list); },
+  warn: (m, e) => log.warn(m, e),
+});
+const voiceOverlay = createVoiceOverlay({
+  preload: path.join(__dirname, '..', 'preload', 'voiceoverlay.js'),
+  page: path.join(rendererDir(), 'voiceoverlay.html'),
+  settings: () => (pluginOn('voiceOverlay') ? (config.builtins.voiceOverlay!.settings as unknown as OverlaySettings) : null),
+});
+const sidePanel = createSidePanel({
+  window: () => discordWin,
+  origin: () => new URL(BRANCH_URL[config.general.discordBranch]).origin,
+  percent: () => Number(config.builtins.multiPanel?.settings.width) || 40,
+  themeCss: () => theme.css,
+  guard: (wc) => guardNavigation(wc),
+  onState: (p) => { const wc = discordWin?.webContents; if (wc && !wc.isDestroyed()) wc.send('zero:side-state', p); },
+});
+let trayWorkspaces = '';
+function pluginsChanged() {
+  if (!pluginOn('multiPanel') && sidePanel.path) sidePanel.close();
+  else sidePanel.fit();
+  voiceOverlay.refresh();
+  const sig = pluginData && pluginOn('workspaceProfiles') ? JSON.stringify(pluginData.get('workspaceProfiles').profiles.map((p) => [p.id, p.name])) : '';
+  if (sig !== trayWorkspaces) { trayWorkspaces = sig; buildTrayMenu(); }
+}
+
+// ---- WorkspaceProfiles: theme, layout, performance profile and plugins, saved and switched together
+function saveWorkspace(name: unknown) {
+  if (!pluginOn('workspaceProfiles')) throw new Error('WorkspaceProfiles is off');
+  const n = typeof name === 'string' ? name.trim().slice(0, 40) : '';
+  if (!n) throw new Error('Give the workspace a name');
+  const d = pluginData.get('workspaceProfiles');
+  const existing = d.profiles.find((p) => p.name.toLowerCase() === n.toLowerCase());
+  if (!existing && d.profiles.length >= 20) throw new Error('20 workspaces is the limit');
+  const ws: Workspace = {
+    id: existing?.id ?? Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: n,
+    themeId: config.activeThemeId, layoutId: config.activeLayoutId, perf: structuredClone(config.performance), builtins: structuredClone(config.builtins),
+  };
+  pluginData.set('workspaceProfiles', { profiles: [...d.profiles.filter((p) => p.id !== ws.id), ws] });
+  broadcast(); pluginsChanged();
+  return ws.name;
+}
+function applyWorkspace(id: unknown) {
+  if (!pluginOn('workspaceProfiles')) throw new Error('WorkspaceProfiles is off');
+  const ws = pluginData.get('workspaceProfiles').profiles.find((p) => p.id === id);
+  if (!ws) throw new Error('Workspace not found');
+  const builtins = { ...config.builtins };
+  for (const def of BUILTINS) if (def.id !== 'workspaceProfiles' && ws.builtins[def.id]) builtins[def.id] = sanitizeBuiltin(def, ws.builtins[def.id]);
+  commit(sanitizeConfig({
+    ...config, builtins,
+    activeThemeId: config.themes[ws.themeId] ? ws.themeId : config.activeThemeId,
+    activeLayoutId: config.layouts[ws.layoutId] ? ws.layoutId : config.activeLayoutId,
+    performance: ws.perf,
+  }));
+  applySpellcheck(); applyThrottle();
+  log.info('workspace applied');
+  return ws.name;
+}
+function deleteWorkspace(id: unknown) {
+  const d = pluginData.get('workspaceProfiles');
+  pluginData.set('workspaceProfiles', { profiles: d.profiles.filter((p) => p.id !== id) });
+  broadcast(); pluginsChanged();
+}
 
 async function reloadPlugins() {
   plugins = await loadPlugins(path.join(userData(), 'plugins'), config.plugins, config.recovery.safeMode);
@@ -361,8 +438,10 @@ function createDiscordWindow() {
   win.on('close', (e) => {
     if (!quitting && config.general.minimizeToTray && tray) { e.preventDefault(); win.hide(); }
   });
-  win.on('resize', () => { fitSettings(); picker.fit(); updateLayer.fit(); });
-  win.on('closed', () => { picker.cancel(); discordWin = null; settingsView = null; });
+  win.on('resize', () => { fitSettings(); picker.fit(); updateLayer.fit(); sidePanel.fit(); });
+  win.on('closed', () => { picker.cancel(); sidePanel.close(); voiceOverlay.destroy(); discordWin = null; settingsView = null; });
+  // a full reload drops the CSS that narrows the page for the side panel, and the overlay list
+  win.webContents.on('did-finish-load', () => { sidePanel.reattach(); voiceOverlay.update(''); });
   void win.loadURL(BRANCH_URL[config.general.discordBranch]);
 }
 
@@ -438,14 +517,20 @@ function toggleSettings() { if (settingsView) closeSettings(); else openSettings
 function createTray() {
   tray = new Tray(makeIcon(32));
   tray.setToolTip(APP_NAME);
+  buildTrayMenu();
+  tray.on('click', () => discordWin?.show());
+}
+function buildTrayMenu() {
+  if (!tray) return;
+  const ws = pluginData && pluginOn('workspaceProfiles') ? pluginData.get('workspaceProfiles').profiles : [];
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: `Open ${APP_NAME}`, click: () => { discordWin?.show(); } },
     { label: 'ZERO settings', click: openSettings },
+    ...(ws.length ? [{ label: 'Workspace', submenu: ws.map((w) => ({ label: w.name, click: () => { try { applyWorkspace(w.id); } catch (err) { log.warn('workspace switch failed', err); } } })) }] : []),
     { label: 'Toggle Safe Mode', click: () => setSafeMode(!config.recovery.safeMode) },
     { type: 'separator' },
     { label: 'Quit', click: () => { quitting = true; app.quit(); } },
   ]));
-  tray.on('click', () => discordWin?.show());
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -490,6 +575,34 @@ function registerIpc() {
     if (!fromDiscord(e) || !config.builtins.messageReminder?.enabled || Date.now() - lastFocus < 1000) return;
     lastFocus = Date.now();
     if (discordWin) { if (discordWin.isMinimized()) discordWin.restore(); discordWin.show(); discordWin.focus(); }
+  });
+  // DownloadManager: one of a few actions on a download ZERO recorded (the page never sends a path).
+  ipcMain.on('zero:dl', (e, action: unknown, id: unknown) => {
+    if (!fromDiscord(e) || !pluginOn('downloadManager') || typeof action !== 'string' || typeof id !== 'string' || id.length > 40) return;
+    void downloads.act(action, id);
+  });
+  // InlineTranslator: the text of one message, at most 500 characters, rate limited in translate.ts.
+  ipcMain.handle('zero:translate', (e, text: unknown, to: unknown) => {
+    const wc = discordWin?.webContents;
+    if (!wc || e.sender !== wc || e.senderFrame !== wc.mainFrame || !pluginOn('inlineTranslator')) return { error: 'InlineTranslator is off.' };
+    return translator(typeof text === 'string' ? text.slice(0, 500) : null, to);
+  });
+  // VoiceOverlay: who is in the call, checked in voiceOverlay.ts.
+  let lastVoice = 0;
+  ipcMain.on('zero:voice', (e, detail: unknown) => {
+    if (!fromDiscord(e)) return;
+    if (!pluginOn('voiceOverlay')) { voiceOverlay.update(''); return; }
+    const now = Date.now();
+    if (detail && now - lastVoice < 60) return; // at most ~16 updates a second
+    lastVoice = now;
+    voiceOverlay.update(detail);
+  });
+  // MultiPanel: open a channel in the side panel ('' closes it, '?' asks what is open).
+  ipcMain.on('zero:side', (e, p: unknown) => {
+    if (!fromDiscord(e) || typeof p !== 'string') return;
+    if (p === '?') { discordWin?.webContents.send('zero:side-state', sidePanel.path); return; }
+    if (p === '') sidePanel.close();
+    else if (pluginOn('multiPanel') && SIDE_PATH.test(p)) sidePanel.open(p);
   });
   ipcMain.on('zero:hintDone', (e) => { if (fromDiscord(e) && !config.general.introSeen) commit({ ...config, general: { ...config.general, introSeen: true } }, { broadcast: false }); });
 
@@ -608,6 +721,9 @@ function registerIpc() {
     return images.import(r.filePaths[0]);
   });
   handle('bg:list', () => images.list());
+  handle('workspaces:save', (name: unknown) => saveWorkspace(name));
+  handle('workspaces:apply', (id: unknown) => applyWorkspace(id));
+  handle('workspaces:delete', (id: unknown) => { deleteWorkspace(id); });
   handle('builtins:set', (id: string, patch: { enabled?: boolean; settings?: Record<string, unknown> }) => {
     const def = BUILTINS.find((d) => d.id === id);
     if (!def || !patch || typeof patch !== 'object') return;
@@ -703,6 +819,7 @@ async function main() {
   theme.css = composeDiscordCss(config, plugins.css.values(), theme.missing);
   pluginData = new PluginDataStore(userData(), (err) => log.error('plugin data save failed', err));
   await pluginData.load();
+  downloads.attach(session.defaultSession, (wc) => wc === discordWin?.webContents || sidePanel.owns(wc));
   registerIpc();
   if (config.general.minimizeToTray) createTray();
   createDiscordWindow();
@@ -710,6 +827,7 @@ async function main() {
   // update check: once, a little after startup, so it never competes with Discord loading
   games = createGameDetector({ dir: userData(), log, onChange: () => pushBuiltins(true) });
   pushBuiltins(true);
+  pluginsChanged();
   updater = createUpdater({
     current: app.getVersion(), enabled: app.isPackaged, log, stateFile: path.join(userData(), 'update-state.json'),
     onState: onUpdateState,
