@@ -34,6 +34,9 @@ app.whenReady().then(async () => {
   fs.writeFileSync(path.join(root, 'assets', 'icon.png'), img.resize({ width: 256, height: 256, quality: 'best' }).toPNG());
   const sizes = [16, 24, 32, 48, 64, 128, 256];
   fs.writeFileSync(path.join(root, 'build', 'icon.ico'), ico(sizes.map((s) => ({ size: s, data: img.resize({ width: s, height: s, quality: 'best' }).toPNG() }))));
-  console.log('icons written: build/icon.png, build/icon.ico, assets/icon.png');
+  // Linux: one PNG per size in build/icons (electron-builder installs them under hicolor/<size>/apps)
+  fs.mkdirSync(path.join(root, 'build', 'icons'), { recursive: true });
+  for (const s of [16, 24, 32, 48, 64, 128, 256, 512]) fs.writeFileSync(path.join(root, 'build', 'icons', s + 'x' + s + '.png'), img.resize({ width: s, height: s, quality: 'best' }).toPNG());
+  console.log('icons written: build/icon.png, build/icon.ico, build/icons/*.png, assets/icon.png');
   app.quit();
 });

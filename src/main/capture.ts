@@ -49,6 +49,7 @@ export function createPicker(deps: PickerDeps) {
   let view: WebContentsView | null = null;
   let pending: ((c: PickerChoice | null) => void) | null = null;
   let audioRequested = false;
+  let audioUnavailable = false;
   let listed = new Map<string, string>();
 
   const fromView = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent) => !!view && e.sender === view.webContents;
@@ -64,7 +65,7 @@ export function createPicker(deps: PickerDeps) {
         icon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.toDataURL() : null,
       }));
     listed = new Map(out.map((s) => [s.id, s.name]));
-    return { audioRequested, sources: out, presets: deps.presets?.get() ?? null };
+    return { audioRequested, audioUnavailable, sources: out, presets: deps.presets?.get() ?? null };
   });
   ipcMain.on('picker:choose', (e, id: unknown, audio: unknown) => {
     if (!fromView(e)) return;
@@ -103,11 +104,13 @@ export function createPicker(deps: PickerDeps) {
     done?.(choice);
   }
 
-  function pick(withAudio: boolean): Promise<PickerChoice | null> {
+  /** audioUnavailable: Discord asked for sound but this system cannot capture it (Linux); the picker says so. */
+  function pick(withAudio: boolean, noAudio = false): Promise<PickerChoice | null> {
     if (pending) finish(null); // a new request replaces an unanswered one
     const win = deps.window();
     if (!win || win.isDestroyed()) return Promise.resolve(null);
     audioRequested = withAudio;
+    audioUnavailable = noAudio;
     const v = new WebContentsView({ webPreferences: { preload: deps.preload, contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false } });
     view = v;
     v.setBackgroundColor('#00000000');

@@ -12,7 +12,8 @@ export function redact(text: string): string {
     .replace(/\b(?:Bearer|Basic|Bot)\s+[\w.~+/=-]{6,}/g, '[REDACTED]')
     .replace(/(authorization|token|cookie|password)(["']?\s*[:=]\s*["']?)[^\s"',;]+/gi, '$1$2[REDACTED]')
     .replace(/[?&](token|code|key|access_token)=[^&\s]+/gi, '?$1=[REDACTED]')
-    .replace(/[A-Za-z]:\\Users\\[^\\\s]+/g, 'C:\\Users\\<user>');
+    .replace(/[A-Za-z]:\\Users\\[^\\\s]+/g, 'C:\\Users\\<user>')
+    .replace(/\/home\/[^/\s]+/g, '/home/<user>');
 }
 
 export class Logger {

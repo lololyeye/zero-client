@@ -1,7 +1,7 @@
 import type { UpdateState } from '../main/updates';
 import type { ReleaseNotes } from '../shared/hotUpdate';
 
-type Action = 'install' | 'later' | 'retry' | 'hide' | 'done';
+type Action = 'install' | 'later' | 'retry' | 'hide' | 'done' | 'restart';
 declare global { interface Window { zeroUpdate: { get(): Promise<UpdateState>; act(a: Action): void; onState(cb: (s: UpdateState) => void): void } } }
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -64,7 +64,7 @@ function renderNotes(n: ReleaseNotes | null) {
   ));
 }
 
-type View = 'available' | 'progress' | 'error' | 'done' | 'failed' | 'idle';
+type View = 'available' | 'progress' | 'handoff' | 'error' | 'done' | 'failed' | 'idle';
 let lastKey = '';
 let view: View = 'idle';
 
@@ -72,12 +72,12 @@ function render(s: UpdateState) {
   const working = s.phase === 'downloading' || s.phase === 'verifying' || s.phase === 'installing';
   const done = !!s.justUpdated && !working;
   const failed = !!s.failedTo && !working && s.phase !== 'available';
-  view = done ? 'done' : failed ? 'failed' : working ? 'progress' : s.phase === 'error' ? 'error' : s.phase === 'available' ? 'available' : 'idle';
+  view = done ? 'done' : failed ? 'failed' : working ? 'progress' : s.phase === 'handoff' ? 'handoff' : s.phase === 'error' ? 'error' : s.phase === 'available' ? 'available' : 'idle';
   const quick = s.kind === 'quick';
 
   $('card').className = 'card' + (done ? ' ok' : view === 'error' || failed ? ' err' : '');
   $('eyebrow').textContent = done ? 'Updated' : failed ? 'Update not applied' : view === 'error' ? 'Update failed'
-    : s.phase === 'installing' ? (quick ? 'Restarting' : 'Installing') : working ? 'Updating' : s.phase === 'checking' ? 'Checking' : 'Update available';
+    : s.phase === 'installing' ? (quick ? 'Restarting' : 'Installing') : working ? 'Updating' : view === 'handoff' ? 'Almost done' : s.phase === 'checking' ? 'Checking' : 'Update available';
   $('title').textContent = done ? `What's new in ZERO ${s.justUpdated}` : `ZERO ${s.latest ?? s.failedTo ?? s.current}`;
   const date = released(s.releaseDate);
   $('meta').textContent = done ? 'Your settings, themes and backgrounds were kept.'
@@ -89,17 +89,26 @@ function render(s: UpdateState) {
   if (chips.dataset.key !== chipKey) {
     chips.dataset.key = chipKey;
     chips.replaceChildren(...(view === 'available' || view === 'progress' || view === 'error') && s.kind ? [
-      el('span', `chip ${s.kind}`, svg(quick ? ICON.bolt : ICON.box, 13), quick ? 'Quick update' : 'Full update'),
+      el('span', `chip ${quick ? 'quick' : 'full'}`, svg(quick ? ICON.bolt : ICON.box, 13), quick ? 'Quick update' : s.via === 'deb' ? 'Full update · .deb' : s.via === 'rpm' ? 'Full update · .rpm' : s.via === 'appimage' ? 'Full update · AppImage' : 'Full update'),
       s.size ? el('span', 'chip', svg(ICON.download, 13), size(s.size)) : null,
       el('span', 'chip', svg(ICON.shield, 13), 'Signed'),
     ].filter((x): x is HTMLSpanElement => !!x) : []);
   }
-  $('lead').textContent = view === 'available' ? (quick ? 'Only ZERO’s own code is downloaded. Nothing is reinstalled: ZERO restarts on the new version in a few seconds.'
-    : 'This version also updates the Chromium engine, so the full package is needed. It installs silently in the background and ZERO opens again by itself.')
+  $('lead').textContent = view === 'available' ? leadFor(s)
+    : view === 'handoff' ? `The verified .${s.via} package is open in your system’s package installer. Confirm there (it asks for your password), then restart ZERO.`
     : failed ? `The update to ${s.failedTo} did not finish, so ZERO kept running ${s.current}. Nothing was lost.` : '';
 
   renderNotes(done ? s.whatsNew : failed ? null : s.notes);
   renderStage(s, quick);
+}
+
+function leadFor(s: UpdateState): string {
+  if (s.kind === 'quick') return 'Only ZERO’s own code is downloaded. Nothing is reinstalled: ZERO restarts on the new version in a few seconds.';
+  const engine = 'This version also updates the Chromium engine, so the full package is needed.';
+  if (s.via === 'appimage') return `${engine} ZERO checks that the new AppImage starts on your system, swaps it in (keeping the old one as a backup) and restarts.`;
+  if (s.via === 'deb' || s.via === 'rpm') return `${engine} ZERO downloads and verifies the .${s.via}, then opens it in your system’s package installer. ZERO never asks for your password itself.`;
+  if (s.kind === 'manual') return `${engine} This kind of install cannot replace itself: get the new version from the download page.`;
+  return `${engine} It installs silently in the background and ZERO opens again by itself.`;
 }
 
 function renderStage(s: UpdateState, quick: boolean) {
@@ -112,7 +121,10 @@ function renderStage(s: UpdateState, quick: boolean) {
   if (view === 'available') {
     stage.replaceChildren(el('div', 'row',
       el('span', 'hint', svg(ICON.shield, 14), 'Settings and themes are kept'),
-      el('div', 'btns', button('Later', 'later'), button('Update now', 'install', 'primary', quick ? ICON.bolt : ICON.download))));
+      el('div', 'btns', button('Later', 'later'), button(s.kind === 'manual' ? 'Open download page' : 'Update now', 'install', 'primary', quick ? ICON.bolt : ICON.download))));
+  } else if (view === 'handoff') {
+    stage.replaceChildren(el('div', 'row', el('span', 'hint', svg(ICON.shield, 14), 'Signature and SHA-512 checked'),
+      el('div', 'btns', button('Close', 'hide'), button('Restart ZERO', 'restart', 'primary', ICON.restart))));
   } else if (view === 'progress') {
     const steps = quick ? [['downloading', 'Download'], ['verifying', 'Verify'], ['installing', 'Restart']] : [['downloading', 'Download'], ['verifying', 'Verify'], ['installing', 'Install']];
     const cur = steps.findIndex(([k]) => k === s.phase);
@@ -142,9 +154,13 @@ function renderStage(s: UpdateState, quick: boolean) {
 
 function label(s: UpdateState, quick: boolean) {
   if (s.notice) return s.notice;
-  if (s.phase === 'downloading') return quick ? 'Downloading ZERO’s code' : 'Downloading the installer';
+  const what = s.via === 'appimage' ? 'the AppImage' : s.via === 'deb' ? 'the .deb package' : s.via === 'rpm' ? 'the .rpm package' : 'the installer';
+  if (s.phase === 'downloading') return quick ? 'Downloading ZERO’s code' : `Downloading ${what}`;
   if (s.phase === 'verifying') return 'Checking the signature and SHA-512';
-  return quick ? 'Restarting on the new version' : 'Installing silently, ZERO opens again by itself';
+  if (quick) return 'Restarting on the new version';
+  if (s.via === 'appimage') return 'Testing the new AppImage, then restarting';
+  if (s.via === 'deb' || s.via === 'rpm') return 'Opening your system’s package installer';
+  return 'Installing silently, ZERO opens again by itself';
 }
 
 function patchProgress(s: UpdateState) {

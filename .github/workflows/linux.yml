@@ -1,0 +1,60 @@
+name: Linux packages
+
+# Builds the AppImage, .deb and .rpm on Ubuntu 24.04 (the base of Linux Mint 22), installs the .deb for real,
+# checks that the installed ZERO starts (--zero-selftest exits before any window, profile or network) and uploads
+# the packages. Releases stay manual: download the artifact and pass it to `npm run release:prepare -- --linux <dir>`.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths: ['src/**', 'tests/**', 'package.json', 'package-lock.json', 'scripts/**', 'build/**', '.github/workflows/linux.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends rpm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - name: Build AppImage, .deb and .rpm
+        run: npm run package:linux -- --publish never
+      - name: Inspect packages
+        run: |
+          ls -la release
+          dpkg-deb -I release/ZERO-*-amd64.deb
+          dpkg-deb -c release/ZERO-*-amd64.deb | grep -E 'applications/|hicolor/512|/opt/ZERO/zero$'
+          rpm -qpi release/ZERO-*-x86_64.rpm
+          rpm -qpR release/ZERO-*-x86_64.rpm
+      - name: Install the .deb and start it once
+        run: |
+          sudo apt-get install -y ./release/ZERO-*-amd64.deb
+          desktop-file-validate /usr/share/applications/zero.desktop || true
+          out=$(/opt/ZERO/zero --zero-selftest --ozone-platform=headless 2>/dev/null | grep ZERO-SELFTEST)
+          echo "$out"; test "$out" = "ZERO-SELFTEST $(node -p "require('./package.json').version")"
+      - name: Start the AppImage once
+        run: |
+          sudo apt-get install -y --no-install-recommends libfuse2t64
+          chmod +x release/ZERO-*-x86_64.AppImage
+          release/ZERO-*-x86_64.AppImage --zero-selftest --ozone-platform=headless 2>/dev/null | grep ZERO-SELFTEST
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zero-linux
+          path: |
+            release/ZERO-*-x86_64.AppImage
+            release/ZERO-*-amd64.deb
+            release/ZERO-*-x86_64.rpm
+          if-no-files-found: error
+          retention-days: 14

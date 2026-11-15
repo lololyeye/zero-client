@@ -1,8 +1,9 @@
 {
   "name": "zero-client",
   "productName": "ZERO",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "ZERO - a personalized, performance-focused desktop client for the Discord web app",
+  "desktopName": "zero.desktop",
   "main": "dist/boot.js",
   "license": "MIT",
   "private": true,
@@ -15,7 +16,8 @@
     "check": "npm run typecheck && npm run lint && npm run test",
     "package": "npm run build && electron-builder --win nsis",
     "icons": "electron scripts/make-icons.cjs",
-    "release:prepare": "npm run package && node scripts/release.mjs"
+    "release:prepare": "npm run package && node scripts/release.mjs",
+    "package:linux": "npm run build && electron-builder --linux AppImage deb rpm"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
@@ -57,6 +59,76 @@
       "provider": "github",
       "owner": "lololyeye",
       "repo": "zero-client"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm"
+      ],
+      "icon": "build/icons",
+      "executableName": "zero",
+      "category": "Network;InstantMessaging;Chat",
+      "synopsis": "Personalized, performance-focused client for Discord",
+      "description": "ZERO loads the official Discord web app with themes, layouts, performance profiles and built-in plugins. It never reads your login token or automates your account.",
+      "maintainer": "lololyeye <f3908770@gmail.com>",
+      "vendor": "lololyeye",
+      "desktop": {
+        "entry": {
+          "Name": "ZERO",
+          "GenericName": "Chat client",
+          "Keywords": "discord;chat;voice;stream;",
+          "Terminal": "false"
+        }
+      },
+      "syncDesktopName": true
+    },
+    "appImage": {
+      "artifactName": "ZERO-${version}-x86_64.${ext}"
+    },
+    "deb": {
+      "artifactName": "ZERO-${version}-amd64.${ext}",
+      "packageName": "zero-client",
+      "priority": "optional",
+      "depends": [
+        "libgtk-3-0 | libgtk-3-0t64",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0 | libatspi2.0-0t64",
+        "libuuid1",
+        "libsecret-1-0",
+        "libasound2 | libasound2t64",
+        "libgbm1",
+        "libdrm2"
+      ],
+      "recommends": [
+        "pipewire-pulse | pulseaudio",
+        "xdg-desktop-portal"
+      ]
+    },
+    "rpm": {
+      "artifactName": "ZERO-${version}-x86_64.${ext}",
+      "packageName": "zero-client",
+      "depends": [
+        "gtk3",
+        "libnotify",
+        "nss",
+        "libXScrnSaver",
+        "libXtst",
+        "xdg-utils",
+        "at-spi2-core",
+        "libuuid",
+        "libsecret",
+        "alsa-lib",
+        "mesa-libgbm",
+        "libdrm"
+      ],
+      "fpm": [
+        "--rpm-rpmbuild-define=_build_id_links none"
+      ]
     }
   },
   "author": "lololyeye",

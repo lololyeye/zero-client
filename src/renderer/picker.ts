@@ -1,7 +1,7 @@
 interface Source { id: string; name: string; kind: 'screen' | 'window'; thumb: string; icon: string | null }
 interface Preset { id: string; name: string; kind: 'screen' | 'window'; source: string; audio: boolean }
 interface Presets { presets: Preset[]; last: Omit<Preset, 'id' | 'name'> | null; hardwareEncode: boolean }
-interface Payload { audioRequested: boolean; sources: Source[]; presets: Presets | null }
+interface Payload { audioRequested: boolean; audioUnavailable?: boolean; sources: Source[]; presets: Presets | null }
 declare global {
   interface Window {
     picker: {
@@ -116,6 +116,7 @@ document.addEventListener('keydown', (e) => {
 void window.picker.load().then((p) => {
   data = p;
   document.getElementById('audio-row')!.hidden = !p.audioRequested;
+  document.getElementById('audio-off')!.hidden = !p.audioUnavailable;
   selected = p.sources.find((s) => s.kind === 'screen')?.id ?? p.sources[0]?.id ?? null;
   // StreamPresets: start where you left off (same source, same sound choice)
   const last = p.presets?.last ? findSource(p.presets.last) : null;

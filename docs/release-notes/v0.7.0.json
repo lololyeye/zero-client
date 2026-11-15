@@ -1,0 +1,15 @@
+{
+  "summary": "ZERO now runs natively on Linux, with packages for Linux Mint, Ubuntu, Debian and Fedora, and an AppImage for every distribution.",
+  "changes": [
+    "Linux: .deb (Linux Mint, Ubuntu, Debian), .rpm (Fedora) and AppImage packages, with a menu entry and icon.",
+    "Settings > Linux: your system, sound server, display server and GPU at a glance, with checks and a report you can export without any personal data.",
+    "Linux updates follow how ZERO was installed: the AppImage replaces itself after a self-test and keeps a backup, and .deb or .rpm packages open in your system's installer, which asks for consent.",
+    "Plugins now show whether they work fully, partly or not at all on your system, and plugins can declare which systems they support."
+  ],
+  "improvements": [
+    "GameDetection recognizes native Linux games and Windows games running through Steam Proton or Wine.",
+    "The screen share picker says when system sound cannot be shared (on Linux).",
+    "Logs and reports hide Linux home folder names as well as Windows user names."
+  ],
+  "fixes": []
+}

@@ -150,3 +150,8 @@ Thirty-one plugins ship with ZERO (`src/shared/builtins.ts` catalog, `src/preloa
 - **Boot checks.** On every start the loader checks the signature again, that the package is newer than the installed code and built for this exact Electron, and that the file still matches the signed SHA-512. It counts starts; the app resets the count after 15 s and on a clean quit. After three failed starts, or if any check fails, it deletes the record and starts the installed code, and the update screen says the update did not apply.
 - **Full update** (Electron changed): the installer is downloaded and checked the same way, then run with `--updated /S --force-run` (silent, same folder, starts ZERO when done). The installer brings newer code, so the loader then ignores the old app package and the updater removes it.
 - **Older clients.** Releases still publish `latest.yml` and the installer, so versions before 0.6.0 (electron-updater) reach the new system through the installer.
+- **Linux.** The manifest can carry `linux.appimage`, `linux.deb` and `linux.rpm` (older clients ignore them; the signature covers them). The quick-update package is the same `.asar` for both systems, since the platform is detected at run time. A full update on Linux replaces the AppImage after `--zero-selftest`, keeping a backup, or opens the .deb/.rpm in the system installer and never asks for root (`src/main/platform/linuxUpdate.ts`). Details in [LINUX.md](LINUX.md).
+
+## Platforms
+
+What differs between Windows and Linux is in `src/main/platform/`; everything else is shared. See [LINUX.md](LINUX.md#architecture).

@@ -1,7 +1,7 @@
-import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { buildDetectableIndex, matchGame, parseTasklist, type Detectable } from '../shared/builtins';
+import { buildDetectableIndex, matchGame, type Detectable } from '../shared/builtins';
+import { CAPABILITIES, IS_LINUX, runningPrograms } from './platform';
 
 const LIST_URL = 'https://discord.com/api/v9/applications/detectable'; // public list, no account involved
 const LIST_MAX_AGE = 7 * 24 * 3600_000;
@@ -10,8 +10,9 @@ const SCAN_MS = 15_000;
 export interface DetectedGame { id: string; name: string; start: number }
 
 /**
- * GameDetection: while enabled, reads the names of running programs every 15 s (Windows `tasklist`, no elevated
- * rights, nothing else read) and matches them against Discord's public list of detectable games.
+ * GameDetection: while enabled, reads the names of running programs every 15 s (Windows: `tasklist`; Linux: the
+ * program names in /proc, including Windows games run through Wine/Proton; no elevated rights, nothing else read)
+ * and matches them against Discord's public list of detectable games.
  * Disabled = no timer, no process at all.
  */
 export function createGameDetector(o: { dir: string; log: { info(m: string): void; warn(m: string, e?: unknown): void }; onChange(g: DetectedGame | null): void }) {
@@ -40,7 +41,7 @@ export function createGameDetector(o: { dir: string; log: { info(m: string): voi
         try { raw = await fs.readFile(file, 'utf8'); } catch { raw = '[]'; }
       }
     }
-    try { index = buildDetectableIndex(JSON.parse(raw)); } catch { index = new Map(); }
+    try { index = buildDetectableIndex(JSON.parse(raw), CAPABILITIES.gameOs); } catch { index = new Map(); }
     o.log.info(`game detection: ${index.size} executables known`);
   }
 
@@ -49,11 +50,8 @@ export function createGameDetector(o: { dir: string; log: { info(m: string): voi
    * runs. Measured on a Ryzen 5 3600: the full scan only lists processes using > 40 MB (~240 ms, a running game
    * always does), and while a game is detected only that executable is checked (~30 ms).
    */
-  function listProcesses(filter: string): Promise<string[]> {
-    return new Promise((resolve) => {
-      execFile('tasklist', ['/fo', 'csv', '/nh', '/fi', filter], { windowsHide: true, timeout: 10_000, maxBuffer: 4 << 20 }, (err, out) => resolve(err ? [] : parseTasklist(out)));
-    });
-  }
+  // Linux: reading /proc costs a few milliseconds and takes no filter, so both scans read the full list.
+  const listProcesses = (filter: string): Promise<string[]> => runningPrograms(filter);
   let currentExe: string | null = null;
 
   async function scan(): Promise<void> {
@@ -63,7 +61,7 @@ export function createGameDetector(o: { dir: string; log: { info(m: string): voi
       if (!index) await (loading ??= loadIndex());
       const idx = index ?? new Map<string, Detectable>();
       // Still running? (a minimized game can drop below the size filter, so it is checked by name)
-      if (current && currentExe && /^[\w .()+-]+\.exe$/i.test(currentExe)) {
+      if (current && currentExe && (IS_LINUX || /^[\w .()+-]+\.exe$/i.test(currentExe))) {
         const still = await listProcesses(`IMAGENAME eq ${currentExe}`);
         if (still.some((p) => p.toLowerCase() === currentExe)) return;
       }

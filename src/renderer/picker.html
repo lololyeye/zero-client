@@ -33,6 +33,9 @@
         <span class="switch"><input type="checkbox" id="audio" checked /><i></i></span>
         <span class="txt"><b>Share sound</b><small>Sound from your PC. Your call is left out.</small></span>
       </label>
+      <div class="audio off" id="audio-off" hidden>
+        <span class="txt"><b>No sound in this share</b><small>Electron can only capture system sound on Windows. Your picture is shared; your voice in the call is unaffected.</small></span>
+      </div>
       <div class="btns">
         <button class="btn ghost" id="cancel">Cancel</button>
         <button class="btn primary" id="go" disabled>Share</button>

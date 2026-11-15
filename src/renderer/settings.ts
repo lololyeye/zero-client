@@ -4,7 +4,7 @@ import {
 } from '../shared/theme';
 import { type Config, type LayoutProfile, type PerfOptions, type PerfProfile } from '../shared/config';
 import { PERMISSIONS, type PluginInfo } from '../shared/plugin';
-import { BUILTINS, CATEGORIES, type BuiltinDef, type SettingValue } from '../shared/builtins';
+import { BUILTINS, CATEGORIES, supportOn, type BuiltinDef, type SettingValue } from '../shared/builtins';
 import { contrastIssues, fixContrast, generatePalette, type PaletteMode } from '../shared/themeStudio';
 import type { Channel } from '../shared/ipc';
 import type { MediaStream, PerfSnapshot } from '../main/perf';
@@ -15,6 +15,7 @@ interface AppState {
   config: Config; plugins: PluginInfo[]; notes: string[]; compat: CompatReport | null; startupMs: number | null;
   safeMode: boolean; version: string; electron: string; chrome: string; pluginsDir: string; perf: PerfOptions; missingImages: string[];
   update: UpdateState | null;
+  platform: 'win32' | 'linux';
   workspaces: { id: string; name: string; themeId: string; layoutId: string; profile: string; plugins: number }[];
 }
 declare global { interface Window { zero: { invoke(c: Channel, ...a: unknown[]): Promise<{ ok: boolean; data?: any; error?: string }>; onState(cb: (s: AppState) => void): () => void; onUpdate(cb: (s: UpdateState) => void): () => void } } }
@@ -72,6 +73,7 @@ const ICONS: Record<string, string> = {
   backups: '<path d="M3 12a9 9 0 1 0 2.6-6.4L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
   advanced: '<path d="M12 3 5 6v5c0 4.4 3 8.4 7 10 4-1.6 7-5.6 7-10V6l-7-3Z"/>',
   about: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  linux: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9l3 2-3 2M12 13h4"/>',
   workspaces: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 17.5h7M17.5 14v7"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/>',
@@ -690,13 +692,24 @@ sect('plugins', 'Plugins', 'Client', 'extension addon permission enable disable 
     })) : h('div', { class: 'empty' }, 'No add-ons. Put a folder with a plugin.json in the plugins folder, then press Reload add-ons.'));
 });
 
+const OS_NAME = { win32: 'Windows', linux: 'Linux' } as const;
+const SUPPORT_LABEL = { partial: 'Partial', unsupported: 'Unavailable', 'needs-deps': 'Needs packages' } as const;
+const osOf = () => state.platform ?? 'win32';
 function builtinCard(d: BuiltinDef) {
   const st = state.config.builtins[d.id] ?? { enabled: false, settings: {} };
-  const gear = d.settings.length || d.note
+  const sup = supportOn(d.id, osOf());
+  const off = sup.level === 'unsupported';
+  const gear = d.settings.length || d.note || sup.reason
     ? h('button', { class: 'bp-gear', title: `${d.name} settings`, 'aria-label': `${d.name} settings`, onclick: () => void builtinSettings(d) }, icon('gear', 20))
     : null;
-  return h('div', { class: 'bp-card' + (st.enabled ? ' on' : '') },
-    h('div', { class: 'bp-head' }, h('b', {}, d.name), gear, toggle(st.enabled, (v) => call('builtins:set', d.id, { enabled: v }).then(() => toast(`${d.name} ${v ? 'enabled' : 'disabled'}`)), `Enable ${d.name}`)),
+  const badge = sup.level !== 'supported'
+    ? h('span', { class: 'pill ' + (off ? 'err' : 'warn'), title: sup.reason ?? '', style: 'margin-left:8px' }, `${SUPPORT_LABEL[sup.level]} on ${OS_NAME[osOf()]}`)
+    : null;
+  const sw = off
+    ? toggle(false, () => toast(sup.reason ?? `Not available on ${OS_NAME[osOf()]}`), `${d.name} is unavailable`)
+    : toggle(st.enabled, (v) => call('builtins:set', d.id, { enabled: v }).then(() => toast(`${d.name} ${v ? 'enabled' : 'disabled'}`)), `Enable ${d.name}`);
+  return h('div', { class: 'bp-card' + (st.enabled && !off ? ' on' : '') },
+    h('div', { class: 'bp-head' }, h('b', {}, d.name, badge), gear, sw),
     h('p', { class: 'bp-desc', title: d.description }, d.description));
 }
 
@@ -718,7 +731,8 @@ function builtinSettings(d: BuiltinDef) {
       return f.type === 'bool' ? h('div', { class: 'bp-field row-inline' }, h('span', {}, f.label), ctl) : h('div', { class: 'bp-field' }, h('label', {}, f.label), ctl);
     });
     return {
-      body: [h('h3', {}, d.name), h('p', { class: 'muted' }, d.description), d.note ? h('p', { class: 'muted small' }, d.note) : null, ...fields],
+      body: [h('h3', {}, d.name), h('p', { class: 'muted' }, d.description), d.note ? h('p', { class: 'muted small' }, d.note) : null,
+        supportOn(d.id, osOf()).reason ? h('p', { class: 'muted small' }, `On ${OS_NAME[osOf()]}: ${supportOn(d.id, osOf()).reason}`) : null, ...fields],
       foot: d.settings.length ? [btn('Cancel', () => close(null), 'ghost'), btn('Save', () => close(cur), 'primary')] : [btn('Close', () => close(null), 'primary')],
     };
   }).then((v) => { if (v) return call('builtins:set', d.id, { settings: v }).then(() => toast(`${d.name} saved`)); });
@@ -742,6 +756,26 @@ sect('workspaces', 'Workspaces', 'Client', 'workspace profile gaming work switch
           btn('Delete', async () => { if (await askConfirm('Delete workspace', `“${w.name}” will be removed. Your current settings stay as they are.`, 'Delete', true)) await call('workspaces:delete', w.id); }, 'ghost danger sm')))))
       : h('div', { class: 'empty' }, 'No workspace yet. Set things up the way you like, then save them here.'));
 }, () => pluginOn('workspaceProfiles'));
+
+// ---- Linux (shown on Linux only) ----
+interface LinuxCheck { id: string; label: string; level: 'ok' | 'warn' | 'error' | 'info'; text: string }
+let linuxCache: { system: [string, string][]; checks: LinuxCheck[] } | null = null;
+sect('linux', 'Linux', 'Client', 'linux system diagnostics wayland x11 pipewire pulseaudio gpu driver portal report distribution', () => {
+  const body = h('div', {}, h('div', { class: 'empty' }, 'Reading your system…'));
+  const pill = { ok: ['ok', 'OK'], warn: ['warn', 'Check'], error: ['err', 'Problem'], info: ['', 'Info'] } as const;
+  const paint = (i: NonNullable<typeof linuxCache>) => body.replaceChildren(
+    h('h2', {}, 'System'),
+    rows(...i.system.map(([k, v]) => row(k, v, null))),
+    h('h2', {}, 'Diagnostics'),
+    rows(...i.checks.map((c) => row(c.label, c.text, h('span', { class: 'pill ' + pill[c.level][0] }, pill[c.level][1])))),
+    h('div', { class: 'actions', style: 'margin-top:14px' },
+      btn('Refresh', async () => { linuxCache = await call('linux:info'); if (linuxCache) paint(linuxCache); }, 'ghost sm'),
+      btn('Export report', async () => { const f = await call('linux:export'); if (f) toast(`Saved ${f}`); }, 'primary sm')),
+    h('p', { class: 'muted small', style: 'margin-top:10px' }, 'The report lists your system and these checks only. It contains no account data, messages, cookies or tokens.'));
+  if (linuxCache) paint(linuxCache);
+  void call('linux:info').then((i) => { if (i) { linuxCache = i; paint(i); } }).catch(() => body.replaceChildren(h('div', { class: 'empty' }, 'Could not read the system information.')));
+  return page('Linux', 'How ZERO runs on your system: display server, sound, graphics, screen sharing and updates.', body);
+}, () => state.platform === 'linux');
 
 // ---- Shortcuts ----
 sect('shortcuts', 'Shortcuts', 'Client', 'hotkey keybind keys keyboard escape', () => page('Shortcuts', 'These work while the Discord window is focused.',
@@ -805,7 +839,8 @@ function updateCard(u: UpdateState | null): HTMLElement {
     : u.phase === 'unsupported' ? 'In-app updates work in the installed app (not in a development run).'
       : u.phase === 'checking' ? 'Checking for updates…'
         : u.phase === 'latest' ? `You're up to date (${u.current}).${u.checkedAt ? ' Checked at ' + new Date(u.checkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '.' : ''}`
-          : u.phase === 'available' ? (u.kind === 'quick' ? `Version ${u.latest} is available: a quick update${u.size ? ` of ${mb(u.size)}` : ''}. Nothing is reinstalled, ZERO restarts on it in a few seconds.` : `Version ${u.latest} is available. It updates the Chromium engine too, so the installer runs silently and ZERO opens again by itself.`)
+          : u.phase === 'handoff' ? `The verified .${u.via} package is open in your system's installer. Restart ZERO once it is installed.`
+          : u.phase === 'available' ? (u.kind === 'manual' ? `Version ${u.latest} is available. This install cannot replace itself: get it from the download page.` : u.kind === 'quick' ? `Version ${u.latest} is available: a quick update${u.size ? ` of ${mb(u.size)}` : ''}. Nothing is reinstalled, ZERO restarts on it in a few seconds.` : `Version ${u.latest} is available. It updates the Chromium engine too, so the installer runs silently and ZERO opens again by itself.`)
             : u.phase === 'downloading' ? (u.notice ?? `Downloading ${u.latest}: ${Math.floor(p?.percent ?? 0)}%${p?.total ? ` · ${mb(p.transferred)} of ${mb(p.total)}` : ''}`)
               : u.phase === 'verifying' ? 'Verifying files…'
                 : u.phase === 'installing' ? (u.kind === 'quick' ? 'Restarting on the new version…' : 'Installing. ZERO will open again in a moment.')

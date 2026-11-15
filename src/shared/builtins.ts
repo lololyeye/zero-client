@@ -29,6 +29,25 @@ export interface BuiltinDef {
 
 export interface BuiltinState { enabled: boolean; settings: Record<string, SettingValue> }
 
+/**
+ * Platform support of each built-in plugin. Anything not listed works the same on every platform (it runs in
+ * the Discord page, or uses only Electron features that exist everywhere). An unsupported plugin cannot be
+ * turned on and is never started.
+ */
+export type SupportLevel = 'supported' | 'partial' | 'unsupported' | 'needs-deps';
+export interface Support { level: SupportLevel; reason?: string }
+export type Os = 'win32' | 'linux';
+const SUPPORT: Partial<Record<Os, Record<string, Support>>> = {
+  linux: {
+    streamPresets: { level: 'partial', reason: 'Saved setups and the hardware encoding check work. Shares have no system sound: Electron captures it on Windows only.' },
+    voiceOverlay: { level: 'partial', reason: 'Needs a desktop with compositing for transparency (Cinnamon, GNOME, KDE have it). On Wayland the overlay cannot be placed in a corner or kept above full-screen games.' },
+    gameDetection: { level: 'supported', reason: 'Detects native Linux games and Windows games running through Steam Proton or Wine.' },
+  },
+};
+export function supportOn(id: string, os: Os): Support {
+  return SUPPORT[os]?.[id] ?? { level: 'supported' };
+}
+
 export const BUILTINS: BuiltinDef[] = [
   {
     id: 'accountPanelServerProfile', name: 'AccountPanelServerProfile', category: 'presence',
@@ -304,9 +323,9 @@ export function sanitizeBuiltins(raw: any): Record<string, BuiltinState> {
 }
 
 /** Only the plugins that are on, with their settings: what the Discord page receives. */
-export function activeBuiltins(all: Record<string, BuiltinState>, safeMode: boolean): Record<string, Record<string, SettingValue>> {
+export function activeBuiltins(all: Record<string, BuiltinState>, safeMode: boolean, os: Os = 'win32'): Record<string, Record<string, SettingValue>> {
   if (safeMode) return {};
-  return Object.fromEntries(Object.entries(all).filter(([, s]) => s.enabled).map(([id, s]) => [id, s.settings]));
+  return Object.fromEntries(Object.entries(all).filter(([id, s]) => s.enabled && supportOn(id, os).level !== 'unsupported').map(([id, s]) => [id, s.settings]));
 }
 
 /** Rich presence built from CustomRPC settings (null when it would be invalid). */
@@ -324,22 +343,27 @@ export function customActivity(s: Record<string, SettingValue>, startedAt: numbe
   return a;
 }
 
-/** Process name matching for GameDetection: Discord's list gives "folder/game.exe"; Windows gives "game.exe". */
+/**
+ * Process name matching for GameDetection: Discord's list gives "folder/game.exe" (Windows) or "folder/game"
+ * (Linux); the system gives the program's file name. Generic names would match unrelated programs.
+ */
+const GENERIC_LINUX = new Set(['java', 'python', 'python3', 'bash', 'sh', 'wine', 'wine64', 'wine-preloader', 'wine64-preloader', 'wineserver', 'steam', 'steamwebhelper', 'electron', 'node', 'zero', 'game', 'launcher', 'start.sh', 'run.sh', 'mono', 'love', 'godot']);
 const GENERIC = new Set(['launcher.exe', 'game.exe', 'client.exe', 'start.exe', 'setup.exe', 'update.exe', 'updater.exe', 'app.exe', 'main.exe', 'play.exe', 'run.exe', 'bootstrap.exe', 'unitycrashhandler64.exe', 'crashreporter.exe', 'java.exe', 'javaw.exe', 'python.exe', 'node.exe', 'electron.exe', 'chrome.exe', 'discord.exe', 'zero.exe', 'steam.exe', 'explorer.exe']);
 
 export interface Detectable { id: string; name: string; exes: string[] }
 
-export function buildDetectableIndex(list: unknown): Map<string, Detectable> {
+export function buildDetectableIndex(list: unknown, oses: readonly string[] = ['win32']): Map<string, Detectable> {
   const idx = new Map<string, Detectable>();
   if (!Array.isArray(list)) return idx;
   for (const app of list) {
     if (!app || typeof app.id !== 'string' || typeof app.name !== 'string' || !Array.isArray(app.executables)) continue;
     const exes: string[] = [];
     for (const e of app.executables) {
-      if (!e || e.os !== 'win32' || typeof e.name !== 'string' || e.is_launcher === true) continue;
+      if (!e || !oses.includes(e.os) || typeof e.name !== 'string' || e.is_launcher === true) continue;
       const base = e.name.toLowerCase().replace(/\\/g, '/').split('/').pop()!;
-      if (!base.endsWith('.exe') || GENERIC.has(base) || base.startsWith('>')) continue;
-      exes.push(base);
+      if (base.startsWith('>') || base.length < 3) continue;
+      if (e.os === 'win32' ? !base.endsWith('.exe') || GENERIC.has(base) : GENERIC_LINUX.has(base) || GENERIC.has(base)) continue;
+      if (!exes.includes(base)) exes.push(base);
     }
     const d = { id: app.id, name: app.name, exes };
     for (const x of exes) if (!idx.has(x)) idx.set(x, d);

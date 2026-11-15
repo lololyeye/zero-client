@@ -1,12 +1,14 @@
-// Prepares a release after `npm run package`:
-//   release/ZERO-app-<v>.asar   ZERO's code only (the quick update)
+// Prepares a release after `npm run package` (and, for Linux, `npm run package:linux` on Linux or the
+// "Linux packages" GitHub workflow, whose files are copied into release/ or passed with --linux <dir>):
+//   release/ZERO-app-<v>.asar   ZERO's code only (the quick update, the same file for Windows and Linux)
 //   release/zero-update.json    the signed manifest ZERO reads to update
 //   release/notes-<v>.md        the GitHub release text, from docs/release-notes/v<v>.json
 // Then publish with: gh release create v<v> release/latest.yml release/ZERO-Setup-<v>.exe release/ZERO-Setup-<v>.exe.blockmap
-//   release/ZERO-app-<v>.asar release/zero-update.json --notes-file release/notes-<v>.md ...
+//   release/ZERO-app-<v>.asar release/zero-update.json release/ZERO-<v>-x86_64.AppImage release/ZERO-<v>-amd64.deb
+//   release/ZERO-<v>-x86_64.rpm --notes-file release/notes-<v>.md ...
 // latest.yml and the blockmap stay for clients older than 0.6.0, which update through the installer.
 import { createHash, createPrivateKey, createPublicKey, sign } from 'node:crypto';
-import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -26,6 +28,7 @@ const notes = JSON.parse(readFileSync(`docs/release-notes/v${version}.json`, 'ut
 for (const k of ['changes', 'improvements', 'fixes']) if (!Array.isArray(notes[k])) notes[k] = [];
 notes.summary = typeof notes.summary === 'string' ? notes.summary : '';
 
+const linuxDir = process.argv.includes('--linux') ? process.argv[process.argv.indexOf('--linux') + 1] : out;
 const describe = (file) => {
   const buf = readFileSync(path.join(out, file));
   return { file, size: buf.length, sha512: createHash('sha512').update(buf).digest('base64') };
@@ -33,11 +36,18 @@ const describe = (file) => {
 const appFile = `ZERO-app-${version}.asar`;
 copyFileSync(path.join(out, 'win-unpacked', 'resources', 'app.asar'), path.join(out, appFile));
 const installerFile = `ZERO-Setup-${version}.exe`;
+// Linux packages are optional: a format missing here is simply offered through the download page.
+const linuxFiles = { appimage: `ZERO-${version}-x86_64.AppImage`, deb: `ZERO-${version}-amd64.deb`, rpm: `ZERO-${version}-x86_64.rpm` };
+const linux = Object.fromEntries(Object.entries(linuxFiles).map(([k, file]) => {
+  if (!existsSync(path.join(linuxDir, file))) { console.warn(`no ${file}: Linux ${k} installs will be sent to the download page`); return [k, null]; }
+  if (linuxDir !== out) copyFileSync(path.join(linuxDir, file), path.join(out, file));
+  return [k, describe(file)];
+}));
 
 const manifest = {
   format: 1, version, date: new Date().toISOString(), electron,
   notes: { summary: notes.summary, changes: notes.changes, improvements: notes.improvements, fixes: notes.fixes },
-  app: describe(appFile), installer: describe(installerFile),
+  app: describe(appFile), installer: describe(installerFile), linux,
 };
 const key = createPrivateKey(readFileSync(keyFile));
 manifest.signature = sign(null, Buffer.from(canonical(manifest)), key).toString('base64');
@@ -48,5 +58,7 @@ writeFileSync(path.join(out, 'zero-update.json'), JSON.stringify(manifest, null,
 
 const section = (title, items) => (items.length ? `### ${title}\n${items.map((i) => `- ${i}`).join('\n')}\n\n` : '');
 writeFileSync(path.join(out, `notes-${version}.md`), `${notes.summary ? notes.summary + '\n\n' : ''}${section('New', notes.changes)}${section('Improved', notes.improvements)}${section('Fixed', notes.fixes)}`
-  + `Download **${installerFile}** below for a new install. ZERO already installed updates itself from Settings > About.\n`);
-console.log(`v${version} (Electron ${electron}): ${appFile} ${(manifest.app.size / 1024).toFixed(0)} KB, ${installerFile} ${(manifest.installer.size / 1048576).toFixed(1)} MB, manifest signed`);
+  + `Download **${installerFile}** below for a new install on Windows`
+  + (linux.appimage || linux.deb || linux.rpm ? `, or on Linux the **${[linux.appimage && 'AppImage', linux.deb && '.deb (Linux Mint, Ubuntu, Debian)', linux.rpm && '.rpm (Fedora)'].filter(Boolean).join('**, **')}** (see docs/LINUX.md)` : '')
+  + `. ZERO already installed updates itself from Settings > About.\n`);
+console.log(`v${version} (Electron ${electron}): ${appFile} ${(manifest.app.size / 1024).toFixed(0)} KB, ${installerFile} ${(manifest.installer.size / 1048576).toFixed(1)} MB, Linux: ${Object.entries(linux).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'}; manifest signed`);

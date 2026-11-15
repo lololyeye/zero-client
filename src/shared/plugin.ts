@@ -22,6 +22,8 @@ export interface PluginManifest {
   author: string;
   apiVersion: number;
   permissions: Permission[];
+  /** Systems the plugin works on ("win32", "linux"). Missing = every system. */
+  platforms?: ('win32' | 'linux')[];
   /** reserved for a scripted runtime (not loaded in v1; v1 plugins are declarative) */
   entry?: string;
   styles?: string;
@@ -50,10 +52,15 @@ export function validateManifest(input: unknown): PluginManifest {
     if (typeof p === 'string' && p in PERMISSIONS) perms.push(p as Permission);
     else issues.push(`unknown permission ${String(p)}`);
   }
+  let platforms: ('win32' | 'linux')[] | undefined;
+  if (m.platforms !== undefined) {
+    if (!Array.isArray(m.platforms) || !m.platforms.length || m.platforms.some((p: unknown) => p !== 'win32' && p !== 'linux')) issues.push('platforms must list "win32" and/or "linux"');
+    else platforms = [...new Set(m.platforms as ('win32' | 'linux')[])];
+  }
   if (m.entry !== undefined && (typeof m.entry !== 'string' || !REL.test(m.entry) || !/\.(m?js)$/i.test(m.entry))) issues.push('entry must be a relative .js path');
   if (m.styles !== undefined && (typeof m.styles !== 'string' || !REL.test(m.styles) || !/\.css$/i.test(m.styles))) issues.push('styles must be a relative .css path');
   if (issues.length) throw new PluginManifestError(issues);
-  return { id: m.id, name: m.name.trim(), version: m.version, description: m.description.trim(), author: m.author.trim(), apiVersion: m.apiVersion, permissions: perms, entry: m.entry, styles: m.styles };
+  return { id: m.id, name: m.name.trim(), version: m.version, description: m.description.trim(), author: m.author.trim(), apiVersion: m.apiVersion, permissions: perms, platforms, entry: m.entry, styles: m.styles };
 }
 
 export type PluginStatus = 'enabled' | 'disabled' | 'error' | 'incompatible' | 'needs-permission';

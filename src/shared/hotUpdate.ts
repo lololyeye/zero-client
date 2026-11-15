@@ -8,7 +8,8 @@ import { createHash, createPublicKey, verify } from 'node:crypto';
  *  - the app package (ZERO-app-<v>.asar, well under 1 MB): ZERO's own code. When the release runs on the same
  *    Electron as the installed app, this is all that is downloaded. ZERO restarts on it in a couple of seconds,
  *    with no installer and nothing written to the install folder.
- *  - the full installer (ZERO-Setup-<v>.exe): only needed when the Electron runtime itself changes. It runs
+ *  - the full package, only needed when the Electron runtime itself changes. Windows: the installer
+ *    (ZERO-Setup-<v>.exe). Linux: the AppImage, .deb or .rpm, matching how ZERO was installed. The installer
  *    silently into the existing folder and starts ZERO again.
  * The manifest is signed (Ed25519). The public key is built into ZERO, and the private key never leaves the
  * maintainer's machine. Each package is checked against the size and SHA-512 written in the signed manifest
@@ -17,6 +18,7 @@ import { createHash, createPublicKey, verify } from 'node:crypto';
 export const REPO = 'lololyeye/zero-client';
 export const FEED_URL = `https://github.com/${REPO}/releases/latest/download/zero-update.json`;
 export const MAX_MANIFEST_BYTES = 128 * 1024;
+export const RELEASES_URL = `https://github.com/${REPO}/releases/latest`;
 
 export interface ReleaseNotes { summary: string; changes: string[]; improvements: string[]; fixes: string[] }
 export interface UpdatePackage { file: string; size: number; sha512: string }
@@ -29,8 +31,13 @@ export interface Manifest {
   notes: ReleaseNotes;
   app: UpdatePackage | null;
   installer: UpdatePackage;
+  /** Linux packages (optional: a release may ship Windows only). */
+  linux: { appimage: UpdatePackage | null; deb: UpdatePackage | null; rpm: UpdatePackage | null };
 }
-export type UpdateKind = 'quick' | 'full';
+/** quick: app package only. full: the platform package. manual: no package fits this install (download page). */
+export type UpdateKind = 'quick' | 'full' | 'manual';
+/** How a full update is applied. */
+export type FullTarget = 'installer' | 'appimage' | 'deb' | 'rpm';
 
 /** Compare dotted versions ("v0.10.1" > "0.9.9"); pre-release suffixes sort before the release. */
 export function compareVersions(a: string, b: string): number {
@@ -108,7 +115,27 @@ export function parseManifest(raw: unknown, publicKeyB64: string): Parsed {
   const app = r.app == null ? null : pkg(r.app, new RegExp(`^ZERO-app-${v}\\.asar$`));
   if (r.app != null && !app) return { ok: false, error: 'manifest: bad app entry' };
   const date = typeof r.date === 'string' && !isNaN(Date.parse(r.date)) ? r.date : '';
-  return { ok: true, manifest: { format: 1, version: r.version, date, electron: r.electron, notes: sanitizeNotes(r.notes), app, installer } };
+  const lx = r.linux && typeof r.linux === 'object' ? r.linux : {};
+  const linux = {
+    appimage: lx.appimage == null ? null : pkg(lx.appimage, new RegExp(`^ZERO-${v}-x86_64\\.AppImage$`)),
+    deb: lx.deb == null ? null : pkg(lx.deb, new RegExp(`^ZERO-${v}-amd64\\.deb$`)),
+    rpm: lx.rpm == null ? null : pkg(lx.rpm, new RegExp(`^ZERO-${v}-x86_64\\.rpm$`)),
+  };
+  if ((lx.appimage != null && !linux.appimage) || (lx.deb != null && !linux.deb) || (lx.rpm != null && !linux.rpm)) return { ok: false, error: 'manifest: bad linux entry' };
+  return { ok: true, manifest: { format: 1, version: r.version, date, electron: r.electron, notes: sanitizeNotes(r.notes), app, installer, linux } };
+}
+
+/**
+ * The full package for this install, and how it is applied. Windows: the installer. Linux: the package of the
+ * same format (an AppImage stays an AppImage, a .deb install gets the .deb). Flatpak, Snap, unpacked folders
+ * and development runs have none: their update comes from their own channel or the download page.
+ */
+export function fullPackage(m: Manifest, os: 'win32' | 'linux', format: string): { pkg: UpdatePackage; target: FullTarget } | null {
+  if (os === 'win32') return { pkg: m.installer, target: 'installer' };
+  if (format === 'appimage' && m.linux.appimage) return { pkg: m.linux.appimage, target: 'appimage' };
+  if (format === 'deb' && m.linux.deb) return { pkg: m.linux.deb, target: 'deb' };
+  if (format === 'rpm' && m.linux.rpm) return { pkg: m.linux.rpm, target: 'rpm' };
+  return null;
 }
 
 /** What a manifest means for the running ZERO: nothing, the app package only, or the full installer. */

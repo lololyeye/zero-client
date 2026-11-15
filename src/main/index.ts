@@ -23,9 +23,13 @@ import { routeKind } from '../preload/controller';
 import type { UpdateState } from './updates';
 import { createUpdater } from './updater';
 import type { BootInfo } from '../shared/hotUpdate';
+import { CAPABILITIES, fileExists, IS_LINUX, PLATFORM, UA_PLATFORM } from './platform';
+import { installFormat } from './platform/linux';
+import { FORMAT_NAME, linuxInfo, reportText } from './platform/diagnostics';
+import { redact } from './logger';
 import { createOverlay } from './overlay';
 import { createGameDetector } from './games';
-import { activeBuiltins, BUILTINS, sanitizeBuiltin } from '../shared/builtins';
+import { activeBuiltins, BUILTINS, sanitizeBuiltin, supportOn } from '../shared/builtins';
 import { PluginDataStore } from './pluginData';
 import { isDataPlugin, PAGE_DATA_PLUGINS, type PluginData, type Workspace } from '../shared/pluginData';
 import { createDownloads } from './downloads';
@@ -228,7 +232,7 @@ function publicState() {
   const perf = resolvePerf(config);
   return {
     config, plugins: plugins.infos, notes, compat, startupMs, safeMode: config.recovery.safeMode,
-    version: boot.running, electron: process.versions.electron, chrome: process.versions.chrome,
+    version: boot.running, electron: process.versions.electron, chrome: process.versions.chrome, platform: PLATFORM,
     pluginsDir: path.join(userData(), 'plugins'), perf, missingImages: [...theme.missing], update: updater?.state ?? null,
     workspaces: pluginData && pluginOn('workspaceProfiles') ? pluginData.get('workspaceProfiles').profiles.map((p) => ({ id: p.id, name: p.name, themeId: p.themeId, layoutId: p.layoutId, profile: p.perf.profile, plugins: Object.values(p.builtins).filter((b) => b.enabled).length })) : [],
   };
@@ -251,7 +255,7 @@ let games: ReturnType<typeof createGameDetector> | null = null;
 let pluginData: PluginDataStore;
 let lastBuiltins = '';
 function builtinsPayload() {
-  const plugins = activeBuiltins(config.builtins, config.recovery.safeMode);
+  const plugins = activeBuiltins(config.builtins, config.recovery.safeMode, PLATFORM);
   // Saved data goes to the page only for the plugins that are on (a plugin that is off never sees it).
   const data = Object.fromEntries(PAGE_DATA_PLUGINS.filter((k) => plugins[k]).map((k) => [k, pluginData.get(k)]));
   return { plugins, game: games?.current ?? null, data };
@@ -269,7 +273,7 @@ function pushBuiltins(force = false) {
   if (wc && !wc.isDestroyed()) wc.send('zero:builtins', p);
 }
 const crashReloads: number[] = [];
-const pluginOn = (id: string) => !config.recovery.safeMode && config.builtins[id]?.enabled === true;
+const pluginOn = (id: string) => !config.recovery.safeMode && config.builtins[id]?.enabled === true && supportOn(id, PLATFORM).level !== 'unsupported';
 
 // ---- plugins that ZERO itself runs a part of (the Discord page only asks)
 const translator = createTranslator();
@@ -373,7 +377,8 @@ function hardenSession(ses: Electron.Session) {
     try {
       if (!req.frame || !isDiscordUrl(req.frame.url)) return reply({});
       log.info(`screen share requested (audio: ${req.audioRequested})`);
-      const choice = await picker.pick(req.audioRequested);
+      // Linux: Electron has no system-audio capture there, so the picker says the share has no sound.
+      const choice = await picker.pick(req.audioRequested && CAPABILITIES.streamAudio, req.audioRequested && !CAPABILITIES.streamAudio);
       if (!choice) return reply({});
       reply(choice.audio ? { video: { id: choice.id, name: choice.name }, audio: 'loopback' } : { video: { id: choice.id, name: choice.name } });
     } catch (err) { log.warn('display media failed', err); reply({}); }
@@ -457,6 +462,35 @@ function createDiscordWindow() {
   // a full reload drops the CSS that narrows the page for the side panel, and the overlay list
   win.webContents.on('did-finish-load', () => { sidePanel.reattach(); voiceOverlay.update(''); });
   void win.loadURL(BRANCH_URL[config.general.discordBranch]);
+}
+
+// ---- Linux: install format and diagnostics
+let fmtCache: string | null = null;
+function installFmt(): string {
+  if (!IS_LINUX) return 'nsis';
+  return (fmtCache ??= installFormat({ env: process.env, execPath: process.execPath, packaged: app.isPackaged, exists: fileExists }));
+}
+function updateStatusText(): string {
+  const f = installFmt();
+  const how = f === 'appimage' ? 'the AppImage is replaced in place after a self-test, with a backup'
+    : f === 'deb' || f === 'rpm' ? `the verified .${f} opens in your system's package installer, which asks for your password`
+      : f === 'flatpak' ? 'Flatpak updates come from Flatpak itself (flatpak update)'
+        : f === 'snap' ? 'Snap updates come from snapd'
+          : f === 'dev' ? 'not available in a development run' : 'the download page opens';
+  return `Quick updates (ZERO's code only) restart ZERO in place. When the Chromium engine changes: ${how}.${config.general.checkUpdates ? '' : ' Update checks are off in Settings > General.'}`;
+}
+function plugins_summary(): string[] {
+  const on = BUILTINS.filter((d) => pluginOn(d.id));
+  return ['Plugins on', ...on.map((d) => `  ${d.name}: ${supportOn(d.id, PLATFORM).level}`), ...(on.length ? [] : ['  (none)']),
+    `Third-party plugins: ${plugins.infos.map((p) => `${p.manifest.id} (${p.status})`).join(', ') || 'none'}`,
+    `Performance profile: ${config.performance.profile}; hardware acceleration: ${config.general.hardwareAcceleration ? 'on' : 'off'}`];
+}
+function linuxDiagnostics() {
+  return linuxInfo({
+    version: boot.running, installed: boot.installed, hotPackage: !!boot.package, hardwareAcceleration: config.general.hardwareAcceleration,
+    partialPlugins: BUILTINS.filter((d) => pluginOn(d.id) && supportOn(d.id, PLATFORM).level !== 'supported').map((d) => d.name),
+    updateStatus: updateStatusText(),
+  }).then((i) => ({ ...i, formatName: FORMAT_NAME[i.format] }));
 }
 
 /** Update screen: a layer in the Discord window, like settings. Never a browser page or a separate window. */
@@ -647,6 +681,8 @@ function registerIpc() {
     } else if (action === 'later') { void updater.remindLater(); updateLayer.close(); }
     else if (action === 'hide') updateLayer.close();
     else if (action === 'done') { updater.acknowledge(); updateLayer.close(); }
+    // after a .deb/.rpm was installed through the system installer: start the new files
+    else if (action === 'restart' && updater.state.phase === 'handoff') { quitting = true; app.relaunch(); app.quit(); }
   });
   // Live edit: validate -> commit (Discord updates immediately) -> persist (debounced). Invalid input keeps
   // the previous working theme because validateTheme throws before anything is changed.
@@ -742,6 +778,7 @@ function registerIpc() {
     const def = BUILTINS.find((d) => d.id === id);
     if (!def || !patch || typeof patch !== 'object') return;
     const cur = config.builtins[id]!;
+    if (patch.enabled === true && supportOn(id, PLATFORM).level === 'unsupported') throw new Error(`${def.name} is not available on this system`);
     const next = sanitizeBuiltin(def, { enabled: patch.enabled ?? cur.enabled, settings: { ...cur.settings, ...patch.settings } });
     commit({ ...config, builtins: { ...config.builtins, [id]: next } });
     if (patch.enabled !== undefined) log.info(`built-in plugin ${id} ${next.enabled ? 'on' : 'off'}`);
@@ -761,6 +798,18 @@ function registerIpc() {
   });
   handle('discord:reload', () => { discordWin?.webContents.reloadIgnoringCache(); });
   handle('logs:open', () => shell.showItemInFolder(path.join(userData(), 'logs', 'zero.log')));
+  // Settings > Linux: system facts and checks, and a report file (system facts only, redacted again on export).
+  handle('linux:info', () => (IS_LINUX ? linuxDiagnostics() : null));
+  handle('linux:export', async () => {
+    if (!IS_LINUX) return null;
+    const info = await linuxDiagnostics();
+    const r = await dialog.showSaveDialog(discordWin!, { title: 'Save ZERO diagnostics', defaultPath: path.join(app.getPath('documents'), `zero-diagnostics-${new Date().toISOString().slice(0, 10)}.txt`), filters: [{ name: 'Text', extensions: ['txt'] }] });
+    if (r.canceled || !r.filePath) return null;
+    const plugins = plugins_summary();
+    await fs.writeFile(r.filePath, redact(reportText(info, plugins)), 'utf8');
+    log.info('linux diagnostics exported');
+    return path.basename(r.filePath);
+  });
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -812,7 +861,7 @@ async function main() {
 
   if (!config.general.hardwareAcceleration) app.disableHardwareAcceleration();
   // Present as the Chromium ZERO runs on, so Discord enables Go Live and stream watching (see capture.ts).
-  app.userAgentFallback = chromeUserAgent(process.versions.chrome);
+  app.userAgentFallback = chromeUserAgent(process.versions.chrome, UA_PLATFORM);
   await app.whenReady();
   protocol.handle('zero-asset', async (req) => {
     const u = new URL(req.url);
@@ -842,7 +891,7 @@ async function main() {
   pushBuiltins(true);
   pluginsChanged();
   updater = createUpdater({
-    boot, enabled: app.isPackaged, log, stateFile: path.join(userData(), 'update-state.json'),
+    boot, enabled: app.isPackaged, log, os: PLATFORM, format: installFmt(), stateFile: path.join(userData(), 'update-state.json'),
     onState: onUpdateState,
     onPrompt: () => { updater?.acknowledge(); updateLayer.open(); },
     beforeInstall: async () => {

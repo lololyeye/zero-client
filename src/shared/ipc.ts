@@ -4,6 +4,6 @@ export const CHANNELS = [
   'theme:import', 'theme:export', 'layout:select', 'layout:save', 'layout:delete', 'perf:snapshot',
   'perf:set', 'general:set', 'bg:import', 'bg:list', 'plugins:setEnabled', 'plugins:grant', 'plugins:openFolder', 'plugins:reload',
   'backups:list', 'backups:restore', 'recovery:safeMode', 'compat:check', 'discord:reload', 'logs:open', 'builtins:set',
-  'workspaces:save', 'workspaces:apply', 'workspaces:delete',
+  'workspaces:save', 'workspaces:apply', 'workspaces:delete', 'linux:info', 'linux:export',
 ] as const;
 export type Channel = (typeof CHANNELS)[number];

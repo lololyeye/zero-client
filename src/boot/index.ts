@@ -34,7 +34,12 @@ const readRecord = () => { try { return JSON.parse(ofs.readFileSync(recordFile, 
 const writeRecord = (r: unknown) => { try { ofs.writeFileSync(recordFile, JSON.stringify(r)); } catch { /* read-only profile: no quick updates */ } };
 const dropRecord = () => { try { ofs.unlinkSync(recordFile); } catch { /* already gone */ } };
 
-if (app.isPackaged) {
+// AppImage updates start the new file once with --zero-selftest before switching to it (platform/linuxUpdate.ts):
+// it proves the file runs here, then exits before any window, profile lock or network.
+if (process.argv.includes('--zero-selftest')) {
+  process.stdout.write(`ZERO-SELFTEST ${info.installed}\n`);
+  app.exit(0);
+} else if (app.isPackaged) {
   const rec = readRecord();
   const choice = chooseBoot(rec, {
     dir, installed: info.installed, electron: process.versions.electron, publicKey: UPDATE_PUBLIC_KEY,
@@ -54,7 +59,7 @@ if (app.isPackaged) {
 (globalThis as any).__zeroBoot = info;
 // Paths are built at run time so the bundler leaves these requires alone.
 const load = (file: string) => require(file);
-if (info.package) {
+if (process.argv.includes('--zero-selftest')) { /* exiting */ } else if (info.package) {
   try { load(path.join(info.package, 'dist', 'main', 'index.js')); }
   catch (err) {
     console.error('app package failed to load', err);

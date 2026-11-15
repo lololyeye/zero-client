@@ -1,12 +1,13 @@
 /**
  * Pure helpers for ZERO's in-app updater (src/main/updater.ts). No Electron imports: unit-tested in Node.
  */
-import { compareVersions, type ReleaseNotes, type UpdateKind } from '../shared/hotUpdate';
+import { compareVersions, type FullTarget, type ReleaseNotes, type UpdateKind } from '../shared/hotUpdate';
 
 export { compareVersions, REPO } from '../shared/hotUpdate';
 export const RELEASES_PAGE = 'https://github.com/lololyeye/zero-client/releases/latest';
 
-export type UpdatePhase = 'idle' | 'checking' | 'latest' | 'available' | 'downloading' | 'verifying' | 'installing' | 'error' | 'unsupported';
+/** handoff: a verified Linux package was opened in the system's package installer; the user finishes there. */
+export type UpdatePhase = 'idle' | 'checking' | 'latest' | 'available' | 'downloading' | 'verifying' | 'installing' | 'handoff' | 'error' | 'unsupported';
 export interface UpdateProgress { percent: number; transferred: number; total: number; bytesPerSecond: number; etaSeconds: number | null }
 export interface UpdateState {
   phase: UpdatePhase;
@@ -16,6 +17,8 @@ export interface UpdateState {
   notes: ReleaseNotes | null;
   /** quick: only ZERO's code is downloaded and ZERO restarts on it. full: the Electron runtime changed, the installer runs silently. */
   kind: UpdateKind | null;
+  /** How a full update is applied (installer, AppImage swap, .deb or .rpm through the system installer). */
+  via: FullTarget | null;
   /** Download size in bytes. */
   size: number | null;
   progress: UpdateProgress | null;
@@ -33,7 +36,7 @@ export interface UpdateState {
 }
 
 export const initialState = (current: string): UpdateState => ({
-  phase: 'idle', current, latest: null, releaseDate: null, notes: null, kind: null, size: null, progress: null, error: null, notice: null,
+  phase: 'idle', current, latest: null, releaseDate: null, notes: null, kind: null, via: null, size: null, progress: null, error: null, notice: null,
   checkedAt: null, justUpdated: null, whatsNew: null, failedTo: null,
 });
 
@@ -81,5 +84,5 @@ export function formatBytes(b: number): string {
 /** Files in the updates folder that can go: everything except the package in use and the one boot.json names. */
 export function staleFiles(files: string[], keep: (string | null)[]): string[] {
   const k = new Set(keep.filter(Boolean));
-  return files.filter((f) => f !== 'boot.json' && !k.has(f) && /^ZERO-(app|Setup)-[\d.]+\.(asar|exe)(\.part)?$/.test(f));
+  return files.filter((f) => f !== 'boot.json' && !k.has(f) && /^ZERO-(?:(?:app|Setup)-[\d.]+\.(?:asar|exe)|[\d.]+-(?:x86_64\.AppImage|amd64\.deb|x86_64\.rpm))(?:\.part)?$/.test(f));
 }

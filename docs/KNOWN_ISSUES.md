@@ -23,3 +23,9 @@ An automated end-to-end run against the signed-in Discord window passed 49 of 49
 12. **Installer:** `npm run package` is configured (NSIS) but unsigned and not tested; there is no auto-update channel.
 13. **Tested on one machine** (Windows 11 Home, Electron 33, 1× display scaling).
 14. **Terms of service:** modified clients are a grey area under Discord's ToS. ZERO restricts itself to cosmetic CSS and never touches the account or API, but the risk is yours.
+
+## Linux (0.7.0)
+
+- Screen shares carry no system sound on Linux: Electron captures it on Windows only. The share picker says so.
+- Voice, screen sharing, GPU drivers, notifications and the tray have not been confirmed on a real Linux Mint desktop yet (see [LINUX.md](LINUX.md#what-was-tested)).
+- The AppImage needs FUSE 2 (`libfuse2t64` on Mint 22 / Ubuntu 24.04).

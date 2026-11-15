@@ -2,10 +2,10 @@
 
 <h1 align="center">ZERO</h1>
 
-<p align="center">A themeable, lightweight desktop client for Discord on Windows.<br>
+<p align="center">A themeable, lightweight desktop client for Discord on Windows and Linux.<br>
 Custom themes and backgrounds that actually apply everywhere, with no restart needed.</p>
 
-<p align="center"><a href="https://github.com/lololyeye/zero-client/releases/latest"><b>Download for Windows</b></a></p>
+<p align="center"><a href="https://github.com/lololyeye/zero-client/releases/latest"><b>Download for Windows</b></a> · <a href="docs/LINUX.md"><b>Linux (Mint, Ubuntu, Fedora, AppImage)</b></a></p>
 
 ---
 
@@ -18,7 +18,9 @@ Custom themes and backgrounds that actually apply everywhere, with no restart ne
 
 > The installer is not code-signed yet, so Windows SmartScreen may warn you. Click **More info → Run anyway**.
 
-**Updates:** at startup ZERO checks GitHub once for a newer release and shows what changed. Most updates are quick: ZERO downloads only its own code (under 1 MB) and restarts on it in a few seconds, with no installer. When a release also updates the Chromium engine, the installer runs silently and ZERO opens again by itself. Every update is signed and checked before it is used. Your settings, themes and backgrounds are kept. You can turn the check off in Settings → General.
+**Linux:** on Linux Mint, Ubuntu or Debian, download `ZERO-x.y.z-amd64.deb` and open it, or use the AppImage on any distribution (`.rpm` for Fedora). See [docs/LINUX.md](docs/LINUX.md) for setup, updates, what works on Linux and troubleshooting. Linux support is new: it is built and started in CI and WSL but not yet confirmed on a real Linux Mint desktop.
+
+**Updates:** at startup ZERO checks GitHub once for a newer release and shows what changed. Most updates are quick: ZERO downloads only its own code (under 1 MB) and restarts on it in a few seconds, with no installer. When a release also updates the Chromium engine, the installer runs silently and ZERO opens again by itself (on Linux: the AppImage replaces itself after a self-test, and a .deb or .rpm opens in your system's package installer). Every update is signed and checked before it is used. Your settings, themes and backgrounds are kept. You can turn the check off in Settings → General.
 
 ## Features
 
@@ -35,7 +37,7 @@ Custom themes and backgrounds that actually apply everywhere, with no restart ne
   - Appearance and privacy: ThemeStudio, WorkspaceProfiles, NotificationProfiles, PrivacyMode.
   - `Ctrl+Shift+L` opens the ZERO panel inside Discord.
 - **Style add-ons:** CSS-only add-ons from your plugins folder, with explicit permissions.
-- **Streaming:** Go Live and watching streams work in ZERO. Pick a screen or an app window, and turn on **Share sound** to stream your PC's audio. Your voice call is left out of the stream, so viewers don't hear an echo.
+- **Streaming:** Go Live and watching streams work in ZERO. Pick a screen or an app window, and turn on **Share sound** to stream your PC's audio (Windows only: Electron cannot capture system sound on Linux). Your voice call is left out of the stream, so viewers don't hear an echo.
 
 Shortcuts: `Ctrl+,` opens or closes ZERO settings, `Esc` closes them, `Ctrl+F` searches them, `Ctrl+Shift+Z` toggles Safe Mode.
 
@@ -52,9 +54,10 @@ npm install
 npm start          # build + run
 npm run check      # typecheck + lint + tests
 npm run package    # Windows installer in ./release
+npm run package:linux   # AppImage, .deb, .rpm (run on Linux; the .rpm needs rpmbuild)
 ```
 
-Docs: [architecture](docs/ARCHITECTURE.md) · [verification](docs/VERIFICATION.md) · [known issues](docs/KNOWN_ISSUES.md)
+Docs: [architecture](docs/ARCHITECTURE.md) · [Linux](docs/LINUX.md) · [verification](docs/VERIFICATION.md) · [known issues](docs/KNOWN_ISSUES.md)
 
 ## License
 

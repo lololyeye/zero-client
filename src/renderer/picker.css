@@ -50,6 +50,7 @@ footer { display: flex; align-items: center; gap: 16px; padding: 14px 16px 14px 
 .audio .txt { display: flex; flex-direction: column; }
 .audio b { font-size: 14px; font-weight: 600; }
 .audio small { color: var(--muted); font-size: 12.5px; }
+.audio.off { cursor: default; max-width: 520px; }
 .btns { margin-left: auto; display: flex; gap: 8px; }
 .btn { height: 36px; padding: 0 18px; border: 0; border-radius: 8px; font-weight: 600; transition: background .12s; }
 .btn.primary { background: var(--brand); color: #fff; }

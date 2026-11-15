@@ -19,6 +19,7 @@ export async function loadPlugins(
   dir: string,
   state: { enabled: Record<string, boolean>; granted: Record<string, string[]> },
   safeMode: boolean,
+  platform: 'win32' | 'linux' = process.platform === 'linux' ? 'linux' : 'win32',
 ): Promise<LoadedPlugins> {
   const infos: PluginInfo[] = [];
   const css = new Map<string, string>();
@@ -35,6 +36,11 @@ export async function loadPlugins(
       const wanted = state.enabled[manifest.id] === true && !safeMode;
       const info: PluginInfo = { manifest, status: wanted ? 'enabled' : 'disabled', missingPermissions: missing };
       if (wanted && missing.length) info.status = 'needs-permission';
+      // A plugin made for another system is listed but never started.
+      if (manifest.platforms && !manifest.platforms.includes(platform)) {
+        infos.push({ ...info, status: 'incompatible', error: `Made for ${manifest.platforms.map((p) => (p === 'win32' ? 'Windows' : 'Linux')).join(' and ')} only.` });
+        continue;
+      }
       if (info.status === 'enabled' && manifest.styles && manifest.permissions.includes('ui.css')) {
         try {
           const file = path.resolve(pdir, manifest.styles);

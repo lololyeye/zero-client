@@ -1,4 +1,4 @@
-import { app, net } from 'electron';
+import { app, net, shell } from 'electron';
 import ofs from 'original-fs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -9,9 +9,10 @@ import {
   type Snooze, type UpdateState,
 } from './updates';
 import {
-  FEED_URL, MAX_MANIFEST_BYTES, packageUrl, parseManifest, planUpdate,
-  type BootInfo, type BootRecord, type Manifest, type ReleaseNotes, type UpdateKind, type UpdatePackage,
+  FEED_URL, fullPackage, MAX_MANIFEST_BYTES, packageUrl, parseManifest, planUpdate, RELEASES_URL,
+  type BootInfo, type BootRecord, type FullTarget, type Manifest, type ReleaseNotes, type UpdateKind, type UpdatePackage,
 } from '../shared/hotUpdate';
+import { dropBackup, replaceAppImage, startDetached } from './platform/linuxUpdate';
 import { UPDATE_PUBLIC_KEY } from '../shared/updateKey';
 
 /**
@@ -21,16 +22,22 @@ import { UPDATE_PUBLIC_KEY } from '../shared/updateKey';
  *  - Quick update (same Electron): downloads only ZERO's code (ZERO-app-<v>.asar, under 1 MB), checks its size
  *    and SHA-512 against the manifest, records it for the boot loader (src/boot/index.ts) and restarts ZERO.
  *    No installer runs and the install folder is not touched; the next start runs the new code.
- *  - Full update (the Electron runtime changed): downloads the installer, checks it the same way and runs it
- *    silently into the existing folder; it starts ZERO again when done.
+ *  - Full update (the Electron runtime changed): downloads the package for this install and checks it the same way.
+ *    Windows: the installer runs silently into the existing folder and starts ZERO again.
+ *    Linux AppImage: the file is replaced in place, with a self-test first and a backup (platform/linuxUpdate.ts).
+ *    Linux .deb/.rpm: the package is opened in the system's package installer, which asks for consent.
+ *    No matching package (Flatpak, Snap, unpacked): the download page opens.
  *  - On the next launch, checks that the new version is the one running, and shows what's new once.
  * Progress shown to the user comes only from the real download.
  */
-interface Pending { target: string; from: string; at: number; kind?: UpdateKind; notes?: ReleaseNotes }
+interface Pending { target: string; from: string; at: number; kind?: UpdateKind; via?: FullTarget | null; appImage?: string; notes?: ReleaseNotes }
 interface Persisted { pending: Pending | null; snooze: Snooze | null }
 
 export interface UpdaterOptions {
   boot: BootInfo;
+  os: 'win32' | 'linux';
+  /** Linux install format (appimage, deb, rpm, …); "nsis" on Windows. */
+  format: string;
   /** Only packaged builds can update (a dev run has nothing to replace). */
   enabled: boolean;
   log: Logger;
@@ -68,6 +75,7 @@ export function createUpdater(o: UpdaterOptions) {
     const r = resolvePending(p, current);
     if (o.boot.rejected) o.log.warn(`app package ${o.boot.rejected} was not used (damaged or failed to start); running the installed ${o.boot.installed}`);
     if (p) {
+      if (r.justUpdated && p.via === 'appimage') await dropBackup(p.appImage);
       if (r.justUpdated) o.log.info(`update verified: now running ${current} (was ${p.from}, ${p.kind ?? 'full'} update)`);
       else o.log.warn(`update to ${p.target} did not take effect; still running ${current}`);
       persisted.pending = null;
@@ -125,14 +133,16 @@ export function createUpdater(o: UpdaterOptions) {
     set({ phase: 'checking', error: null, notice: null });
     try {
       const { m, raw } = await fetchManifest();
-      const kind = planUpdate(m, current, process.versions.electron);
-      if (kind) {
+      const plan = planUpdate(m, current, process.versions.electron);
+      if (plan) {
         manifest = m; manifestRaw = raw;
-        const pkg = kind === 'quick' ? m.app! : m.installer;
-        set({ phase: 'available', progress: null, checkedAt: Date.now(), latest: m.version, releaseDate: m.date || null, notes: m.notes, kind, size: pkg.size });
+        const full = plan === 'full' ? fullPackage(m, o.os, o.format) : null;
+        const kind: UpdateKind = plan === 'quick' ? 'quick' : full ? 'full' : 'manual';
+        const size = kind === 'quick' ? m.app!.size : full?.pkg.size ?? null;
+        set({ phase: 'available', progress: null, checkedAt: Date.now(), latest: m.version, releaseDate: m.date || null, notes: m.notes, kind, via: full?.target ?? null, size });
         if (manual || shouldPrompt(m.version, current, persisted.snooze, Date.now())) o.onPrompt(state);
       } else {
-        set({ phase: 'latest', latest: m.version, checkedAt: Date.now(), notes: null, kind: null, size: null });
+        set({ phase: 'latest', latest: m.version, checkedAt: Date.now(), notes: null, kind: null, via: null, size: null });
       }
     } catch (err) {
       const msg = (err as Error)?.message ?? String(err);
@@ -195,8 +205,12 @@ export function createUpdater(o: UpdaterOptions) {
   async function install(): Promise<void> {
     const m = manifest, raw = manifestRaw, kind = state.kind;
     if (!o.enabled || busy || !m || !raw || !kind || (state.phase !== 'available' && state.phase !== 'error')) return;
+    if (kind === 'manual') { void shell.openExternal(RELEASES_URL); return; }
+    const full = kind === 'full' ? fullPackage(m, o.os, o.format) : null;
+    if (kind === 'full' && !full) return;
     busy = true;
-    const pkg = kind === 'quick' ? m.app! : m.installer;
+    const pkg = kind === 'quick' ? m.app! : full!.pkg;
+    const via = full?.target ?? null;
     const file = path.join(dir, pkg.file);
     try {
       await fsp.mkdir(dir, { recursive: true });
@@ -216,7 +230,24 @@ export function createUpdater(o: UpdaterOptions) {
         }
       }
       set({ phase: 'installing', notice: null, error: null });
-      persisted.pending = { target: m.version, from: current, at: Date.now(), kind, notes: m.notes };
+      if (via === 'deb' || via === 'rpm') {
+        // Root is never requested by ZERO: the system's installer shows the package and asks for consent.
+        const err = await shell.openPath(file);
+        if (err) throw new Error(`could not open the package installer: ${err}`);
+        o.log.info(`${via} package for ${m.version} verified and opened in the system installer`);
+        persisted.pending = { target: m.version, from: current, at: Date.now(), kind, via, notes: m.notes };
+        await save();
+        set({ phase: 'handoff' });
+        busy = false;
+        return;
+      }
+      let appImage: string | undefined;
+      if (via === 'appimage') {
+        const running = process.env.APPIMAGE;
+        if (!running) throw new Error('not running from an AppImage');
+        appImage = await replaceAppImage(file, running, m.version); // self-test first, keeps a backup
+      }
+      persisted.pending = { target: m.version, from: current, at: Date.now(), kind, via, appImage, notes: m.notes };
       await save();
       if (kind === 'quick') {
         // The boot loader checks this record (signature, Electron version, file hash) on every start.
@@ -225,10 +256,13 @@ export function createUpdater(o: UpdaterOptions) {
         await fsp.rename(recordFile + '.tmp', recordFile);
       }
       await o.beforeInstall();
-      o.log.info(kind === 'quick' ? `switching to ${m.version} (app package) and restarting` : `installing ${m.version} silently and restarting`);
+      o.log.info(kind === 'quick' ? `switching to ${m.version} (app package) and restarting` : via === 'appimage' ? `AppImage replaced by ${m.version}; restarting` : `installing ${m.version} silently and restarting`);
       await o.log.flush();
       if (kind === 'quick') {
         app.relaunch();
+        app.quit();
+      } else if (appImage) {
+        startDetached(appImage);
         app.quit();
       } else {
         // Same arguments electron-builder's own updater passes: update mode, silent, start ZERO when done.
