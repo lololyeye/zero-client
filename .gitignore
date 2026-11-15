@@ -5,3 +5,4 @@ release
 .claude/
 release-test
 bench-results
+*.pem

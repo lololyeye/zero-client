@@ -1,0 +1,14 @@
+{
+  "summary": "Updates no longer reinstall ZERO. Only its own code is downloaded, under 1 MB, and ZERO restarts on it in a few seconds.",
+  "changes": [
+    "Quick updates: ZERO downloads its new code only and restarts on it, with no installer.",
+    "A new update screen with the notes of each version, grouped as New, Improved and Fixed.",
+    "What's new: after an update, ZERO shows once what changed."
+  ],
+  "improvements": [
+    "Every update is signed. ZERO checks the signature, the size and the SHA-512 before using it.",
+    "If a new version fails to start three times in a row, ZERO goes back to the installed one by itself.",
+    "The full installer is only used when the Chromium engine changes, and it runs silently."
+  ],
+  "fixes": []
+}

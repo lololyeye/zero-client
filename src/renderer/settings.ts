@@ -798,17 +798,17 @@ sect('about', 'About', '', 'version electron license update', () => {
 
 /** Settings > About update row. Progress events patch it in place (see boot), the page is not rebuilt. */
 function updateCard(u: UpdateState | null): HTMLElement {
-  const mb = (b: number) => (b / 1048576).toFixed(1) + ' MB';
+  const mb = (b: number) => (b < 1048576 ? Math.max(1, Math.round(b / 1024)) + ' KB' : (b / 1048576).toFixed(1) + ' MB');
   const p = u?.progress;
   const working = u && (u.phase === 'downloading' || u.phase === 'verifying' || u.phase === 'installing');
   const text = !u || u.phase === 'idle' ? 'Not checked yet.'
     : u.phase === 'unsupported' ? 'In-app updates work in the installed app (not in a development run).'
       : u.phase === 'checking' ? 'Checking for updates…'
         : u.phase === 'latest' ? `You're up to date (${u.current}).${u.checkedAt ? ' Checked at ' + new Date(u.checkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '.' : ''}`
-          : u.phase === 'available' ? `Version ${u.latest} is available. It installs in place and ZERO restarts by itself.`
+          : u.phase === 'available' ? (u.kind === 'quick' ? `Version ${u.latest} is available: a quick update${u.size ? ` of ${mb(u.size)}` : ''}. Nothing is reinstalled, ZERO restarts on it in a few seconds.` : `Version ${u.latest} is available. It updates the Chromium engine too, so the installer runs silently and ZERO opens again by itself.`)
             : u.phase === 'downloading' ? (u.notice ?? `Downloading ${u.latest}: ${Math.floor(p?.percent ?? 0)}%${p?.total ? ` · ${mb(p.transferred)} of ${mb(p.total)}` : ''}`)
               : u.phase === 'verifying' ? 'Verifying files…'
-                : u.phase === 'installing' ? 'Installing. ZERO will restart in a moment.'
+                : u.phase === 'installing' ? (u.kind === 'quick' ? 'Restarting on the new version…' : 'Installing. ZERO will open again in a moment.')
                   : (u.error ?? 'The update failed.');
   const ctl = !u || u.phase === 'unsupported' ? null
     : u.phase === 'available' ? h('span', { style: 'display:flex;gap:8px' }, btn('Check again', () => call('update:check'), 'ghost sm'), btn('Update now', () => call('update:open'), 'primary sm'))

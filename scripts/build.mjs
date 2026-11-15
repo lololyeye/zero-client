@@ -1,12 +1,16 @@
 import { build } from 'esbuild';
-import { cp, mkdir, rm } from 'node:fs/promises';
+import { cp, mkdir, readFile, rm } from 'node:fs/promises';
 
 const dev = process.argv.includes('--dev');
 await rm('dist', { recursive: true, force: true });
 await mkdir('dist/renderer', { recursive: true });
 
-const common = { bundle: true, sourcemap: dev ? 'inline' : false, minify: !dev, logLevel: 'info', target: 'es2022' };
-await build({ ...common, entryPoints: ['src/main/index.ts'], outfile: 'dist/main/index.js', platform: 'node', format: 'cjs', external: ['electron'] });
+const { version } = JSON.parse(await readFile('package.json', 'utf8'));
+// The version is built into the code: a quick update runs newer code than the installed package.json says.
+const common = { define: { __ZERO_VERSION__: JSON.stringify(version) }, bundle: true, sourcemap: dev ? 'inline' : false, minify: !dev, logLevel: 'info', target: 'es2022' };
+// Entry point: picks the installed code or a verified app package (see src/boot/index.ts).
+await build({ ...common, entryPoints: ['src/boot/index.ts'], outfile: 'dist/boot.js', platform: 'node', format: 'cjs', external: ['electron', 'original-fs'] });
+await build({ ...common, entryPoints: ['src/main/index.ts'], outfile: 'dist/main/index.js', platform: 'node', format: 'cjs', external: ['electron', 'original-fs'] });
 await build({ ...common, entryPoints: ['src/preload/settings.ts'], outfile: 'dist/preload/settings.js', platform: 'node', format: 'cjs', external: ['electron'] });
 await build({ ...common, entryPoints: ['src/preload/discord.ts'], outfile: 'dist/preload/discord.js', platform: 'node', format: 'cjs', external: ['electron'] });
 await build({ ...common, entryPoints: ['src/renderer/settings.ts'], outfile: 'dist/renderer/settings.js', platform: 'browser', format: 'iife' });

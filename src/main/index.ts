@@ -22,6 +22,7 @@ import { CHANNELS } from '../shared/ipc';
 import { routeKind } from '../preload/controller';
 import type { UpdateState } from './updates';
 import { createUpdater } from './updater';
+import type { BootInfo } from '../shared/hotUpdate';
 import { createOverlay } from './overlay';
 import { createGameDetector } from './games';
 import { activeBuiltins, BUILTINS, sanitizeBuiltin } from '../shared/builtins';
@@ -33,6 +34,19 @@ import { createVoiceOverlay, type OverlaySettings } from './voiceOverlay';
 import { createSidePanel, SIDE_PATH } from './sidePanel';
 
 const APP_NAME = 'ZERO';
+declare const __ZERO_VERSION__: string;
+/** Set by the boot loader (src/boot/index.ts): which copy of ZERO's code is running and where updates live. */
+let boot: BootInfo;
+function bootInfo(): BootInfo {
+  const b = (globalThis as any).__zeroBoot as BootInfo | undefined;
+  if (b && typeof b.dir === 'string') return b;
+  // Started without the boot loader (should not happen in a build): no quick updates, same profile rules.
+  let name = APP_NAME;
+  try { const n = JSON.parse(readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')).zeroTestName; if (typeof n === 'string' && /^ZERO [\w ]{1,30}$/.test(n)) name = n; } catch { /* default name */ }
+  app.setName(name);
+  app.setPath('userData', path.join(app.getPath('appData'), name));
+  return { dir: path.join(app.getPath('userData'), 'updates'), name, installed: __ZERO_VERSION__, running: __ZERO_VERSION__, package: null, rejected: null, testFeed: null };
+}
 const BRANCH_URL = { stable: 'https://discord.com/app', ptb: 'https://ptb.discord.com/app', canary: 'https://canary.discord.com/app' } as const;
 const DISCORD_HOSTS = /^(?:[\w-]+\.)?(?:discord\.com|discordapp\.com|discord\.gg|discord\.media|discordapp\.net)$/i;
 const ALLOWED_PERMS = new Set(['media', 'display-capture', 'notifications', 'clipboard-sanitized-write', 'fullscreen', 'mediaKeySystem']);
@@ -214,7 +228,7 @@ function publicState() {
   const perf = resolvePerf(config);
   return {
     config, plugins: plugins.infos, notes, compat, startupMs, safeMode: config.recovery.safeMode,
-    version: app.getVersion(), electron: process.versions.electron, chrome: process.versions.chrome,
+    version: boot.running, electron: process.versions.electron, chrome: process.versions.chrome,
     pluginsDir: path.join(userData(), 'plugins'), perf, missingImages: [...theme.missing], update: updater?.state ?? null,
     workspaces: pluginData && pluginOn('workspaceProfiles') ? pluginData.get('workspaceProfiles').profiles.map((p) => ({ id: p.id, name: p.name, themeId: p.themeId, layoutId: p.layoutId, profile: p.perf.profile, plugins: Object.values(p.builtins).filter((b) => b.enabled).length })) : [],
   };
@@ -752,9 +766,8 @@ function registerIpc() {
 // ------------------------------------------------------------------------------------------------
 async function main() {
   // Isolated builds for the update lifecycle test set "zeroTestName" (separate profile); real builds never do.
-  let testName: string | null = null;
-  try { const n = JSON.parse(readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')).zeroTestName; if (typeof n === 'string' && /^ZERO [\w ]{1,30}$/.test(n)) testName = n; } catch { /* default name */ }
-  app.setName(testName ?? APP_NAME);
+  boot = bootInfo();
+  app.setName(boot.name);
   // ZERO_DEV_SECOND_INSTANCE lets an unpackaged dev build run beside the installed app (for side-by-side benchmarks).
   const devSecond = !app.isPackaged && process.env.ZERO_DEV_SECOND_INSTANCE === '1';
   if (!devSecond && !app.requestSingleInstanceLock()) { app.quit(); return; }
@@ -786,7 +799,7 @@ async function main() {
   }
   config = { ...config, recovery: { ...config.recovery, crashStreak: config.recovery.crashStreak + 1 } };
   await store.save(config, false);
-  setTimeout(() => { config = { ...config, recovery: { ...config.recovery, crashStreak: 0 } }; saveSoon(0); }, 15_000).unref();
+  setTimeout(() => { config = { ...config, recovery: { ...config.recovery, crashStreak: 0 } }; saveSoon(0); updater?.markHealthy(); }, 15_000).unref();
 
   images = new ImageStore(path.join(userData(), 'backgrounds'), {
     decode: (buf) => {
@@ -829,7 +842,7 @@ async function main() {
   pushBuiltins(true);
   pluginsChanged();
   updater = createUpdater({
-    current: app.getVersion(), enabled: app.isPackaged, log, stateFile: path.join(userData(), 'update-state.json'),
+    boot, enabled: app.isPackaged, log, stateFile: path.join(userData(), 'update-state.json'),
     onState: onUpdateState,
     onPrompt: () => { updater?.acknowledge(); updateLayer.open(); },
     beforeInstall: async () => {
@@ -846,6 +859,7 @@ async function main() {
   let flushed = false;
   app.on('before-quit', (e) => {
     quitting = true;
+    updater?.markHealthy(); // a clean exit is not a failed start
     if (flushed) return;
     // make sure a debounced edit and the Discord login are on disk before exiting
     e.preventDefault();

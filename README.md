@@ -18,7 +18,7 @@ Custom themes and backgrounds that actually apply everywhere, with no restart ne
 
 > The installer is not code-signed yet, so Windows SmartScreen may warn you. Click **More info → Run anyway**.
 
-**Updates:** at startup ZERO checks GitHub once for a newer release. If one exists, it offers to download the new installer. Your settings, themes and backgrounds are kept. You can turn the check off in Settings → General.
+**Updates:** at startup ZERO checks GitHub once for a newer release and shows what changed. Most updates are quick: ZERO downloads only its own code (under 1 MB) and restarts on it in a few seconds, with no installer. When a release also updates the Chromium engine, the installer runs silently and ZERO opens again by itself. Every update is signed and checked before it is used. Your settings, themes and backgrounds are kept. You can turn the check off in Settings → General.
 
 ## Features
 

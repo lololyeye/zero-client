@@ -1,9 +1,9 @@
 {
   "name": "zero-client",
   "productName": "ZERO",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "ZERO - a personalized, performance-focused desktop client for the Discord web app",
-  "main": "dist/main/index.js",
+  "main": "dist/boot.js",
   "license": "MIT",
   "private": true,
   "scripts": {
@@ -14,7 +14,8 @@
     "test": "vitest run",
     "check": "npm run typecheck && npm run lint && npm run test",
     "package": "npm run build && electron-builder --win nsis",
-    "icons": "electron scripts/make-icons.cjs"
+    "icons": "electron scripts/make-icons.cjs",
+    "release:prepare": "npm run package && node scripts/release.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
@@ -23,8 +24,7 @@
     "esbuild": "^0.24.0",
     "oxlint": "^0.13.0",
     "typescript": "^5.7.0",
-    "vitest": "^2.1.8",
-    "electron-updater": "^6.8.11"
+    "vitest": "^2.1.8"
   },
   "build": {
     "appId": "app.zero.client",

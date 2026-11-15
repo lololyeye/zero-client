@@ -1,8 +1,10 @@
 /**
  * Pure helpers for ZERO's in-app updater (src/main/updater.ts). No Electron imports: unit-tested in Node.
  */
-export const REPO = 'lololyeye/zero-client';
-export const RELEASES_PAGE = `https://github.com/${REPO}/releases/latest`;
+import { compareVersions, type ReleaseNotes, type UpdateKind } from '../shared/hotUpdate';
+
+export { compareVersions, REPO } from '../shared/hotUpdate';
+export const RELEASES_PAGE = 'https://github.com/lololyeye/zero-client/releases/latest';
 
 export type UpdatePhase = 'idle' | 'checking' | 'latest' | 'available' | 'downloading' | 'verifying' | 'installing' | 'error' | 'unsupported';
 export interface UpdateProgress { percent: number; transferred: number; total: number; bytesPerSecond: number; etaSeconds: number | null }
@@ -11,7 +13,11 @@ export interface UpdateState {
   current: string;
   latest: string | null;
   releaseDate: string | null;
-  notes: string[];
+  notes: ReleaseNotes | null;
+  /** quick: only ZERO's code is downloaded and ZERO restarts on it. full: the Electron runtime changed, the installer runs silently. */
+  kind: UpdateKind | null;
+  /** Download size in bytes. */
+  size: number | null;
   progress: UpdateProgress | null;
   /** Human-readable problem, shown with a Retry button. */
   error: string | null;
@@ -20,51 +26,16 @@ export interface UpdateState {
   checkedAt: number | null;
   /** Set on the first launch after a successful update. */
   justUpdated: string | null;
+  /** The notes of that update, for the "What's new" screen. */
+  whatsNew: ReleaseNotes | null;
   /** Set on the first launch after an update that did not take effect. */
   failedTo: string | null;
 }
 
 export const initialState = (current: string): UpdateState => ({
-  phase: 'idle', current, latest: null, releaseDate: null, notes: [], progress: null, error: null, notice: null, checkedAt: null, justUpdated: null, failedTo: null,
+  phase: 'idle', current, latest: null, releaseDate: null, notes: null, kind: null, size: null, progress: null, error: null, notice: null,
+  checkedAt: null, justUpdated: null, whatsNew: null, failedTo: null,
 });
-
-/** Compare dotted versions ("v0.10.1" > "0.9.9"); pre-release suffixes sort before the release. */
-export function compareVersions(a: string, b: string): number {
-  const parse = (v: string) => {
-    const [core, pre] = v.trim().replace(/^v/i, '').split('-', 2) as [string, string | undefined];
-    return { nums: core.split('.').map((n) => parseInt(n, 10) || 0), pre: pre ?? null };
-  };
-  const x = parse(a), y = parse(b);
-  for (let i = 0; i < Math.max(x.nums.length, y.nums.length); i++) {
-    const d = (x.nums[i] ?? 0) - (y.nums[i] ?? 0);
-    if (d) return Math.sign(d);
-  }
-  if (x.pre === y.pre) return 0;
-  if (x.pre === null) return 1;
-  if (y.pre === null) return -1;
-  return x.pre < y.pre ? -1 : 1;
-}
-
-const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'", apos: "'", nbsp: ' ' };
-
-/**
- * Release notes arrive as HTML (GitHub feed), Markdown or a list of per-version notes. They become a few plain text
- * lines: no markup is ever rendered, so a release body cannot inject anything into ZERO's UI.
- */
-export function notesToLines(notes: unknown, max = 8): string[] {
-  let text = '';
-  if (typeof notes === 'string') text = notes;
-  else if (Array.isArray(notes)) text = notes.map((n) => (typeof n?.note === 'string' ? n.note : '')).join('\n');
-  const lines = text
-    .replace(/<\s*(br|\/p|\/li|\/h\d|\/div)\s*\/?>/gi, '\n')
-    .replace(/<\s*li[^>]*>/gi, '\n- ')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&(#?\w+);/g, (m, e: string) => ENTITIES[e.toLowerCase()] ?? m)
-    .split(/\r?\n/)
-    .map((l) => l.replace(/^\s*[-*•]\s+/, '').replace(/\*\*|__|`/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim())
-    .filter((l) => l && !/^#+\s*$/.test(l) && !/download .*setup.*\.exe/i.test(l));
-  return lines.map((l) => l.replace(/^#+\s*/, '')).slice(0, max).map((l) => (l.length > 160 ? l.slice(0, 157) + '…' : l));
-}
 
 /** Seconds left at the current speed, or null while the speed is unknown. */
 export function etaSeconds(transferred: number, total: number, bytesPerSecond: number): number | null {
@@ -82,14 +53,15 @@ export function shouldPrompt(latest: string | null, current: string, snooze: Sno
 
 /** Network problems are retried automatically; anything else (e.g. a checksum mismatch) waits for the user. */
 export function isNetworkError(message: string): boolean {
-  return /net::|ECONNRESET|ETIMEDOUT|ENOTFOUND|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|socket hang up|aborted|premature close|timed? ?out/i.test(message);
+  return /net::|ECONNRESET|ETIMEDOUT|ENOTFOUND|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|socket hang up|aborted|premature close|timed? ?out|fetch failed/i.test(message);
 }
 
 export function friendlyError(message: string): string {
-  if (/sha512|checksum|integrity/i.test(message)) return 'The download did not match the published checksum, so it was discarded. Nothing was installed.';
+  if (/sha512|checksum|integrity|size mismatch/i.test(message)) return 'The download did not match the signed release, so it was discarded. Nothing was changed.';
+  if (/signature|manifest/i.test(message)) return 'The update information could not be verified, so it was ignored. Nothing was changed.';
   if (isNetworkError(message)) return 'The connection was lost. Check your internet connection, then retry.';
   if (/ENOSPC/i.test(message)) return 'There is not enough disk space to download the update.';
-  if (/404|Cannot find .*latest\.yml|No published versions/i.test(message)) return 'No update package was found for this release.';
+  if (/HTTP 404/i.test(message)) return 'No update package was found for this release.';
   return 'The update could not be completed. Your current version is untouched.';
 }
 
@@ -97,4 +69,17 @@ export function friendlyError(message: string): string {
 export function resolvePending(pending: { target: string } | null, current: string): { justUpdated: string | null; failedTo: string | null } {
   if (!pending) return { justUpdated: null, failedTo: null };
   return compareVersions(current, pending.target) >= 0 ? { justUpdated: current, failedTo: null } : { justUpdated: null, failedTo: pending.target };
+}
+
+/** Human size: "640 KB", "1.4 MB", "116 MB". */
+export function formatBytes(b: number): string {
+  if (b < 1024 * 1024) return `${Math.max(1, Math.round(b / 1024))} KB`;
+  const mb = b / 1048576;
+  return `${mb >= 100 ? Math.round(mb) : mb.toFixed(1)} MB`;
+}
+
+/** Files in the updates folder that can go: everything except the package in use and the one boot.json names. */
+export function staleFiles(files: string[], keep: (string | null)[]): string[] {
+  const k = new Set(keep.filter(Boolean));
+  return files.filter((f) => f !== 'boot.json' && !k.has(f) && /^ZERO-(app|Setup)-[\d.]+\.(asar|exe)(\.part)?$/.test(f));
 }
