@@ -1,14 +1,18 @@
 /**
  * Data kept by built-in plugins across restarts (reminders, saved messages, notes, text snippets).
  *
- * The Discord page can only write these four documents, and every write goes through the sanitizers below:
+ * The Discord page can only write the PAGE_DATA_PLUGINS documents (stream presets are written by ZERO's own screen
+ * picker only), and every write goes through the sanitizers below:
  * fixed fields, plain strings with length limits, ids made of digits, Discord CDN links only, and a cap on the
  * number of entries. Nothing here is code, and nothing here is ever account data (no tokens, no cookies).
  */
 
-export const DATA_PLUGINS = ['messageReminder', 'smartBookmarks', 'quickNotes', 'smartText'] as const;
+export const DATA_PLUGINS = ['messageReminder', 'smartBookmarks', 'quickNotes', 'smartText', 'voiceAnalytics', 'micStudio', 'streamPresets'] as const;
 export type DataPlugin = (typeof DATA_PLUGINS)[number];
-export const isDataPlugin = (id: unknown): id is DataPlugin => typeof id === 'string' && (DATA_PLUGINS as readonly string[]).includes(id);
+/** What the Discord page may write. streamPresets is written only by ZERO's screen picker. */
+export const PAGE_DATA_PLUGINS = ['messageReminder', 'smartBookmarks', 'quickNotes', 'smartText', 'voiceAnalytics', 'micStudio'] as const;
+export type PageDataPlugin = (typeof PAGE_DATA_PLUGINS)[number];
+export const isDataPlugin = (id: unknown): id is PageDataPlugin => typeof id === 'string' && (PAGE_DATA_PLUGINS as readonly string[]).includes(id);
 
 /** Largest document the page may send (characters of JSON). */
 export const MAX_DOC_CHARS = 1_500_000;
@@ -30,11 +34,31 @@ export interface Bookmark extends MessageRef { id: string; collection: string; s
 export interface Note { id: string; text: string; pinned: boolean; updated: number }
 export interface Snippet { id: string; name: string; category: string; text: string; favorite: boolean; uses: number }
 
+/** One finished call, summarized (VoiceAnalytics). No audio, no participants. */
+export interface CallSummary {
+  id: string; start: number; end: number; place: string;
+  pingAvg: number | null; pingMax: number | null; lossAvg: number | null; lossMax: number | null;
+  /** voice server regions used, in order (e.g. "rotterdam") */
+  servers: string[]; disconnects: number; reconnects: number;
+}
+/** A saved copy of Discord's voice settings (MicStudio). */
+export interface MicProfile {
+  id: string; name: string; inputDeviceId: string; inputDeviceName: string; inputVolume: number;
+  mode: 'VOICE_ACTIVITY' | 'PUSH_TO_TALK'; threshold: number; autoThreshold: boolean;
+  echoCancellation: boolean; noiseSuppression: boolean; automaticGainControl: boolean; noiseCancellation: boolean;
+}
+/** ZERO's screen picker: a source remembered by kind and name, and whether sound is shared. */
+export interface StreamSource { kind: 'screen' | 'window'; source: string; audio: boolean }
+export interface StreamPreset extends StreamSource { id: string; name: string }
+
 export interface PluginData {
   messageReminder: { reminders: Reminder[] };
   smartBookmarks: { collections: string[]; items: Bookmark[] };
   quickNotes: { notes: Note[] };
   smartText: { snippets: Snippet[] };
+  voiceAnalytics: { calls: CallSummary[] };
+  micStudio: { profiles: MicProfile[] };
+  streamPresets: { presets: StreamPreset[]; last: StreamSource | null };
 }
 
 const SNOWFLAKE = /^\d{15,22}$/;
@@ -119,12 +143,54 @@ function snippet(x: any): Snippet | null {
   return { id: sid, name, category: line(x?.category, 40), text: str(x?.text, 4000), favorite: x?.favorite === true, uses };
 }
 
+const ms = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v < 100_000 ? Math.round(v) : null);
+const pct = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100 ? Math.round(v * 100) / 100 : null);
+const clampNum = (v: unknown, lo: number, hi: number, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
+
+function call(x: any): CallSummary | null {
+  const cid = id(x?.id); const start = time(x?.start); const end = time(x?.end);
+  if (!cid || !start || !end || end < start) return null;
+  return {
+    id: cid, start, end, place: line(x?.place, 100),
+    pingAvg: ms(x?.pingAvg), pingMax: ms(x?.pingMax), lossAvg: pct(x?.lossAvg), lossMax: pct(x?.lossMax),
+    servers: list(x?.servers, 10, (v) => (typeof v === 'string' && /^[a-z][a-z0-9-]{0,39}$/.test(v) ? v : null)),
+    disconnects: Math.round(clampNum(x?.disconnects, 0, 10_000, 0)), reconnects: Math.round(clampNum(x?.reconnects, 0, 10_000, 0)),
+  };
+}
+
+function micProfile(x: any): MicProfile | null {
+  const pid = id(x?.id); const name = line(x?.name, 40);
+  if (!pid || !name) return null;
+  return {
+    id: pid, name,
+    inputDeviceId: line(x?.inputDeviceId, 200, 'default'), inputDeviceName: line(x?.inputDeviceName, 120),
+    inputVolume: clampNum(x?.inputVolume, 0, 200, 100),
+    mode: x?.mode === 'PUSH_TO_TALK' ? 'PUSH_TO_TALK' : 'VOICE_ACTIVITY',
+    threshold: clampNum(x?.threshold, -100, 0, -60), autoThreshold: x?.autoThreshold !== false,
+    echoCancellation: x?.echoCancellation !== false, noiseSuppression: x?.noiseSuppression === true,
+    automaticGainControl: x?.automaticGainControl !== false, noiseCancellation: x?.noiseCancellation === true,
+  };
+}
+
+function streamSource(x: any): StreamSource | null {
+  const kind = x?.kind === 'window' ? 'window' : x?.kind === 'screen' ? 'screen' : null;
+  const source = line(x?.source, 200);
+  return kind && source ? { kind, source, audio: x?.audio === true } : null;
+}
+function streamPreset(x: any): StreamPreset | null {
+  const s = streamSource(x); const pid = id(x?.id); const name = line(x?.name, 40);
+  return s && pid && name ? { ...s, id: pid, name } : null;
+}
+
 export function emptyData<K extends DataPlugin>(k: K): PluginData[K] {
   const e: PluginData = {
     messageReminder: { reminders: [] },
     smartBookmarks: { collections: ['Saved'], items: [] },
     quickNotes: { notes: [] },
     smartText: { snippets: [] },
+    voiceAnalytics: { calls: [] },
+    micStudio: { profiles: [] },
+    streamPresets: { presets: [], last: null },
   };
   return e[k];
 }
@@ -147,6 +213,9 @@ export function sanitizeData<K extends DataPlugin>(k: K, raw: unknown): PluginDa
     }
     case 'quickNotes': return { notes: list(r.notes, 200, note) } as PluginData[K];
     case 'smartText': return { snippets: list(r.snippets, 300, snippet) } as PluginData[K];
+    case 'voiceAnalytics': return { calls: list(r.calls, 200, call) } as PluginData[K];
+    case 'micStudio': return { profiles: list(r.profiles, 20, micProfile) } as PluginData[K];
+    case 'streamPresets': return { presets: list(r.presets, 20, streamPreset), last: streamSource(r.last) } as PluginData[K];
   }
   return emptyData(k);
 }

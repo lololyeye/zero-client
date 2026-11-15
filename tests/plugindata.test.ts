@@ -99,3 +99,48 @@ describe('plugin data file', () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 });
+
+describe('page runtime', () => {
+  it('has no block function named like a runtime-level one (sloppy-mode hoisting would replace it)', async () => {
+    const fs = await import('node:fs/promises');
+    const src = await fs.readFile('src/preload/runtime.ts', 'utf8');
+    const top = new Set<string>(); const block: string[] = [];
+    for (const l of src.split('\n')) {
+      const m = /^( +)(?:async )?function (\w+)/.exec(l);
+      if (!m) continue;
+      if (m[1]!.length === 2) top.add(m[2]!); else block.push(m[2]!);
+    }
+    expect(top.has('apply')).toBe(true);
+    expect(block.filter((n) => top.has(n))).toEqual([]);
+  });
+});
+
+describe('voice and stream plugin data', () => {
+  it('call summaries keep numbers and server regions only', () => {
+    const v = sanitizeData('voiceAnalytics', { calls: [
+      { id: 'c1', start: 1000, end: 61_000, place: 'Server › General', pingAvg: 42.4, pingMax: 9e9, lossAvg: 150, servers: ['rotterdam', '10.0.0.1', 'US-East'], disconnects: 2, reconnects: 1, participants: ['x'] },
+      { id: 'c2', start: 5000, end: 1000 },
+    ] });
+    expect(v.calls).toHaveLength(1);
+    expect(v.calls[0]).toEqual({ id: 'c1', start: 1000, end: 61_000, place: 'Server › General', pingAvg: 42, pingMax: null, lossAvg: null, lossMax: null, servers: ['rotterdam'], disconnects: 2, reconnects: 1 });
+  });
+  it('mic profiles are clamped to valid Discord values', () => {
+    const m = sanitizeData('micStudio', { profiles: [{ id: 'p1', name: 'Gaming', inputVolume: 999, threshold: 50, mode: 'HACK', noiseCancellation: true }] });
+    expect(m.profiles[0]).toMatchObject({ inputVolume: 200, threshold: 0, mode: 'VOICE_ACTIVITY', noiseCancellation: true, inputDeviceId: 'default' });
+  });
+  it('the page cannot write stream presets', () => {
+    expect(isDataPlugin('streamPresets')).toBe(false);
+    expect(isDataPlugin('voiceAnalytics')).toBe(true);
+    const s = sanitizeData('streamPresets', { presets: [{ id: 'a', name: 'Game', kind: 'window', source: 'Roblox', audio: true }, { id: 'b', name: 'x', kind: 'tab', source: 'y' }], last: { kind: 'screen', source: 'Screen 1', audio: 'yes' } });
+    expect(s.presets.map((p) => p.name)).toEqual(['Game']);
+    expect(s.last).toEqual({ kind: 'screen', source: 'Screen 1', audio: false });
+  });
+  it('a preset can only be made from a source the picker listed', async () => {
+    const { presetFrom } = await import('../src/main/capture');
+    const listed = new Map([['screen:0:0', 'Screen 1'], ['window:42:0', 'Roblox']]);
+    expect(presetFrom(listed, 'window:99:0', 'x', true, 'id1')).toBeNull();
+    expect(presetFrom(listed, 'window:42:0', '   ', true, 'id1')).toBeNull();
+    expect(presetFrom(listed, 'window:42:0', ' Game\u0007 night ', 1, 'id1')).toEqual({ id: 'id1', name: 'Game night', kind: 'window', source: 'Roblox', audio: false });
+    expect(presetFrom(listed, 'screen:0:0', 'Desk', true, 'id2')?.kind).toBe('screen');
+  });
+});

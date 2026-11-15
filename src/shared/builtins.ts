@@ -44,6 +44,12 @@ export const BUILTINS: BuiltinDef[] = [
       { value: 'stopwatch', label: '01:02:03' }, { value: 'human', label: '1h 2m 3s' }] }],
   },
   {
+    id: 'connectionDoctor', name: 'ConnectionDoctor',
+    description: 'Live network check for calls: ping, packet loss, jitter, voice server, drops, with plain advice.',
+    note: 'In the ZERO panel (Ctrl+Shift+L) › Connection. Reads Discord\'s own call numbers; "Copy report" leaves out addresses and names.',
+    settings: [],
+  },
+  {
     id: 'crashHandler', name: 'CrashHandler',
     description: 'Utility plugin for handling and possibly recovering from crashes without a restart',
     note: 'Reloads Discord when its "Something went wrong" screen appears (at most 3 times in 10 minutes).',
@@ -80,6 +86,12 @@ export const BUILTINS: BuiltinDef[] = [
     description: 'Ignore activities from showing up on your status ONLY. You can configure which ones are specifically ignored.',
     note: 'One game name per line, as shown on your profile.',
     settings: [{ key: 'ignored', label: 'Ignored games', type: 'list', default: [], placeholder: 'e.g. Valorant' }],
+  },
+  {
+    id: 'micStudio', name: 'MicStudio',
+    description: 'Test your microphone live: level, clipping, background noise, sensitivity check. Save and switch voice setting profiles.',
+    note: 'In the ZERO panel (Ctrl+Shift+L) › Mic. The test stays on your PC and is never recorded. Profiles apply your Discord voice settings with Discord\'s own actions.',
+    settings: [],
   },
   {
     id: 'messageLogger', name: 'MessageLogger',
@@ -133,9 +145,37 @@ export const BUILTINS: BuiltinDef[] = [
     settings: [],
   },
   {
+    id: 'smartAudioFocus', name: 'SmartAudioFocus',
+    description: 'Lowers or silences chosen Discord sounds while you are in a call, streaming or gaming.',
+    note: 'Incoming call ringing is never changed. Only Discord\'s own sounds are affected, never voices or streams.',
+    settings: [
+      { key: 'when', label: 'When', type: 'select', default: 'call', options: [
+        { value: 'call', label: 'In a call or streaming' }, { value: 'stream', label: 'Only while streaming' }, { value: 'game', label: 'While a game runs or streaming (GameDetection)' }] },
+      { key: 'messages', label: 'Message sounds', type: 'select', default: 'quiet', options: [{ value: 'normal', label: 'Normal' }, { value: 'quiet', label: 'Quieter' }, { value: 'mute', label: 'Silent' }] },
+      { key: 'mentions', label: 'Mention sounds', type: 'select', default: 'normal', options: [{ value: 'normal', label: 'Normal' }, { value: 'quiet', label: 'Quieter' }, { value: 'mute', label: 'Silent' }] },
+      { key: 'voice', label: 'People joining or leaving the call', type: 'select', default: 'normal', options: [{ value: 'normal', label: 'Normal' }, { value: 'quiet', label: 'Quieter' }, { value: 'mute', label: 'Silent' }] },
+      { key: 'streams', label: 'Stream start, stop and viewers', type: 'select', default: 'quiet', options: [{ value: 'normal', label: 'Normal' }, { value: 'quiet', label: 'Quieter' }, { value: 'mute', label: 'Silent' }] },
+      { key: 'self', label: 'Your mute, deafen and push-to-talk', type: 'select', default: 'normal', options: [{ value: 'normal', label: 'Normal' }, { value: 'quiet', label: 'Quieter' }, { value: 'mute', label: 'Silent' }] },
+      { key: 'level', label: 'How quiet is "Quieter"', type: 'select', default: '25', options: [
+        { value: '50', label: 'Half volume' }, { value: '25', label: 'A quarter' }, { value: '10', label: 'Barely audible' }] },
+    ],
+  },
+  {
     id: 'smartText', name: 'SmartText',
     description: 'Saved replies with variables. Type ;; in a message box to insert one.',
     note: 'Variables: {me}, {user} (the person in a DM, or the one you are replying to), {channel}, {server}, {date}, {time}. Inserted into the box, never sent for you. Manage them in the ZERO panel (Ctrl+Shift+L).',
+    settings: [],
+  },
+  {
+    id: 'streamPresets', name: 'StreamPresets',
+    description: 'Saved screen-share setups in ZERO\'s picker: one click shares the same screen or app, with or without sound.',
+    note: 'The picker also reopens on your last source and says whether your graphics card encodes the stream. Resolution and frame rate stay in Discord\'s stream menu, under its own Nitro rules.',
+    settings: [],
+  },
+  {
+    id: 'voiceAnalytics', name: 'VoiceAnalytics',
+    description: 'A history of your calls: duration, ping, packet loss, voice server changes and drops.',
+    note: 'Numbers only, kept on this PC (last 200 calls). Never audio, never who was in the call. In the ZERO panel › Calls.',
     settings: [],
   },
 ];

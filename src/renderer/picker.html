@@ -17,6 +17,16 @@
       <button role="tab" data-kind="screen" aria-selected="true">Screens</button>
       <button role="tab" data-kind="window" aria-selected="false">Applications</button>
     </div>
+    <div class="presets" id="presets" hidden>
+      <div class="presets-row" id="preset-list" role="group" aria-label="Stream presets"></div>
+      <div class="presets-row">
+        <span class="cap" id="caps"></span>
+        <form class="save" id="save-form">
+          <input id="preset-name" type="text" maxlength="40" placeholder="Name this source and sound…" aria-label="Preset name" />
+          <button class="btn small" type="submit">Save preset</button>
+        </form>
+      </div>
+    </div>
     <div class="grid" id="grid" role="listbox" aria-label="Sources"><div class="note">Loading…</div></div>
     <footer>
       <label class="audio" id="audio-row" hidden>

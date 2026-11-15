@@ -28,6 +28,12 @@ export class PluginDataStore {
 
   get<K extends DataPlugin>(k: K): PluginData[K] { return this.data[k] ?? emptyData(k); }
 
+  /** From ZERO itself (already typed); still passed through the schema. */
+  set<K extends DataPlugin>(k: K, value: PluginData[K]): void {
+    this.data = { ...this.data, [k]: sanitizeData(k, value) };
+    this.saveSoon();
+  }
+
   /** From the Discord page: a JSON string, validated and trimmed to the schema. Returns false when refused. */
   setFromPage(k: DataPlugin, json: string): boolean {
     if (json.length > MAX_DOC_CHARS) return false;

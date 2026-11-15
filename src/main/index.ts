@@ -26,7 +26,7 @@ import { createOverlay } from './overlay';
 import { createGameDetector } from './games';
 import { activeBuiltins, BUILTINS, sanitizeBuiltin } from '../shared/builtins';
 import { PluginDataStore } from './pluginData';
-import { DATA_PLUGINS, isDataPlugin } from '../shared/pluginData';
+import { isDataPlugin, PAGE_DATA_PLUGINS, type PluginData } from '../shared/pluginData';
 
 const APP_NAME = 'ZERO';
 const BRANCH_URL = { stable: 'https://discord.com/app', ptb: 'https://ptb.discord.com/app', canary: 'https://canary.discord.com/app' } as const;
@@ -232,7 +232,7 @@ let lastBuiltins = '';
 function builtinsPayload() {
   const plugins = activeBuiltins(config.builtins, config.recovery.safeMode);
   // Saved data goes to the page only for the plugins that are on (a plugin that is off never sees it).
-  const data = Object.fromEntries(DATA_PLUGINS.filter((k) => plugins[k]).map((k) => [k, pluginData.get(k)]));
+  const data = Object.fromEntries(PAGE_DATA_PLUGINS.filter((k) => plugins[k]).map((k) => [k, pluginData.get(k)]));
   return { plugins, game: games?.current ?? null, data };
 }
 function pushBuiltins(force = false) {
@@ -309,6 +309,21 @@ function updateRoute(url: string) {
 
 const picker = createPicker({
   window: () => discordWin,
+  // StreamPresets: only while that plugin is on. Presets are written by the picker page through main, never by Discord.
+  presets: {
+    get: () => {
+      if (!config.builtins.streamPresets?.enabled || config.recovery.safeMode) return null;
+      const d = pluginData.get('streamPresets');
+      const enc = String((app.getGPUFeatureStatus() as unknown as Record<string, string>).video_encode ?? '');
+      return { presets: d.presets, last: d.last, hardwareEncode: config.general.hardwareAcceleration && enc.startsWith('enabled') };
+    },
+    update: (fn: (d: PluginData['streamPresets']) => void) => {
+      if (!config.builtins.streamPresets?.enabled || config.recovery.safeMode) return;
+      const d = structuredClone(pluginData.get('streamPresets'));
+      fn(d);
+      pluginData.set('streamPresets', d);
+    },
+  },
   preload: path.join(__dirname, '..', 'preload', 'picker.js'),
   page: path.join(rendererDir(), 'picker.html'),
   guard: (wc) => guardNavigation(wc),

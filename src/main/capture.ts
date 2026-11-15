@@ -1,4 +1,5 @@
 import { WebContentsView, desktopCapturer, ipcMain, type BrowserWindow, type WebContents } from 'electron';
+import type { PluginData, StreamPreset } from '../shared/pluginData';
 
 /**
  * Discord's web app decides from the user agent whether the browser may Go Live and watch streams.
@@ -25,6 +26,19 @@ interface PickerDeps {
   preload: string;
   page: string;
   guard(wc: WebContents): void;
+  /** StreamPresets: null while the plugin is off. */
+  presets?: {
+    get(): { presets: StreamPreset[]; last: PluginData['streamPresets']['last']; hardwareEncode: boolean } | null;
+    update(fn: (d: PluginData['streamPresets']) => void): void;
+  };
+}
+
+/** A preset made from a source the picker listed (never from a name the page invents). */
+export function presetFrom(listed: ReadonlyMap<string, string>, id: unknown, name: unknown, audio: unknown, newId: string): StreamPreset | null {
+  if (typeof id !== 'string' || !listed.has(id) || typeof name !== 'string') return null;
+  const n = name.replace(/[\u0000-\u001f]/g, '').trim().slice(0, 40); // oxlint-disable-line no-control-regex
+  if (!n) return null;
+  return { id: newId, name: n, kind: id.startsWith('screen:') ? 'screen' : 'window', source: listed.get(id)!.slice(0, 200), audio: audio === true };
 }
 
 /**
@@ -50,11 +64,25 @@ export function createPicker(deps: PickerDeps) {
         icon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.toDataURL() : null,
       }));
     listed = new Map(out.map((s) => [s.id, s.name]));
-    return { audioRequested, sources: out };
+    return { audioRequested, sources: out, presets: deps.presets?.get() ?? null };
   });
   ipcMain.on('picker:choose', (e, id: unknown, audio: unknown) => {
     if (!fromView(e)) return;
-    finish(id === null ? null : resolveChoice(listed, id, audio, audioRequested));
+    const choice = id === null ? null : resolveChoice(listed, id, audio, audioRequested);
+    if (choice) deps.presets?.update((d) => { d.last = { kind: choice.id.startsWith('screen:') ? 'screen' : 'window', source: choice.name.slice(0, 200), audio: choice.audio }; });
+    finish(choice);
+  });
+  ipcMain.handle('picker:savePreset', (e, id: unknown, name: unknown, audio: unknown) => {
+    if (!fromView(e)) throw new Error('Unauthorized sender');
+    const p = presetFrom(listed, id, name, audio, Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
+    if (!p) return null;
+    deps.presets?.update((d) => { d.presets = [...d.presets.filter((x) => x.name !== p.name), p].slice(-20); });
+    return deps.presets?.get()?.presets ?? null;
+  });
+  ipcMain.handle('picker:deletePreset', (e, presetId: unknown) => {
+    if (!fromView(e)) throw new Error('Unauthorized sender');
+    deps.presets?.update((d) => { d.presets = d.presets.filter((x) => x.id !== presetId); });
+    return deps.presets?.get()?.presets ?? null;
   });
 
   function fit() {

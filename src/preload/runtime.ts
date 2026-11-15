@@ -723,9 +723,12 @@ export function zeroRuntime(): void {
   }
 
   // ---- the ZERO panel (Ctrl+Shift+L or the button in the channel header): one tab per plugin
-  type Tab = { label: string; render: (host: HTMLElement) => void };
+  type Tab = { label: string; render: (host: HTMLElement) => void; leave?: () => void };
   const tabs = new Map<string, Tab>();
-  let hub: HTMLElement | null = null; let hubTab = '';
+  let hub: HTMLElement | null = null; let hubTab = ''; let shownTab = '';
+  /** the tab on screen is going away (switch, close, plugin off): its live updates and mic test stop */
+  const leaveTab = () => { const t = tabs.get(shownTab); shownTab = ''; try { t?.leave?.(); } catch { /* ignore */ } };
+  const TAB_ORDER = ['messageReminder', 'smartBookmarks', 'quickNotes', 'smartText', 'connectionDoctor', 'voiceAnalytics', 'micStudio'];
   const HUB_CSS = [
     '.zero-ui{font-family:var(--font-primary,"gg sans","Segoe UI",sans-serif);color:var(--text-normal,#dbdee1);font-size:14px;line-height:1.35}',
     '.zero-ui input,.zero-ui textarea,.zero-ui select{font:inherit;color:inherit;background:var(--input-background,#1e1f22);border:1px solid var(--border-subtle,rgba(255,255,255,.08));border-radius:6px;padding:7px 9px;outline:none;min-width:0}',
@@ -739,12 +742,12 @@ export function zeroRuntime(): void {
     '.zero-toast{display:flex;align-items:center;gap:8px;padding:10px 10px 10px 14px;border-radius:8px;background:var(--background-floating,#111214);box-shadow:0 8px 24px rgba(0,0,0,.4),0 0 0 1px rgba(255,255,255,.06)}.zero-toast>span{flex:1;min-width:0;overflow-wrap:anywhere}',
     '.zero-pop{position:fixed;z-index:100001;width:300px;padding:12px;border-radius:8px;background:var(--background-floating,#111214);box-shadow:0 8px 24px rgba(0,0,0,.4),0 0 0 1px rgba(255,255,255,.06);display:flex;flex-direction:column;gap:8px}',
     '.zero-pop-head{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.02em;color:var(--text-muted,#949ba4)}',
-    '.zero-chips{display:flex;flex-wrap:wrap;gap:6px}.zero-row{display:flex;gap:6px;align-items:center}.zero-row>input,.zero-row>select{flex:1}',
+    '.zero-chips{display:flex;flex-wrap:wrap;gap:6px}.zero-row{display:flex;gap:6px;align-items:center}.zero-row>input:not([type=checkbox]),.zero-row>select{flex:1}',
     '.zero-muted{color:var(--text-muted,#949ba4);font-size:12px}',
     '.zero-mi:hover{background:var(--menu-item-default-hover-bg,var(--brand-560,#4752c4))!important;color:#fff!important}',
     '.zero-hub{position:fixed;z-index:100000;top:56px;right:16px;bottom:16px;width:400px;max-width:calc(100vw - 32px);display:flex;flex-direction:column;border-radius:10px;background:var(--background-floating,#111214);box-shadow:0 12px 32px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.06);overflow:hidden}',
     '.zero-hub-head{display:flex;align-items:center;gap:4px;padding:8px 8px 0 12px}.zero-hub-head b{margin-right:auto;font-size:15px}',
-    '.zero-tabs{display:flex;gap:2px;padding:8px 8px 0;border-bottom:1px solid var(--border-subtle,rgba(255,255,255,.08))}',
+    '.zero-tabs{display:flex;flex-wrap:wrap;gap:2px;padding:8px 8px 0;border-bottom:1px solid var(--border-subtle,rgba(255,255,255,.08))}',
     '.zero-tab{border:0;background:none;color:var(--interactive-normal,#b5bac1);font:inherit;font-weight:500;padding:6px 10px;border-radius:6px 6px 0 0;cursor:pointer;border-bottom:2px solid transparent}.zero-tab:hover{color:var(--interactive-hover,#dbdee1)}.zero-tab[aria-selected="true"]{color:var(--interactive-active,#fff);border-bottom-color:var(--brand-500,#5865f2)}',
     '.zero-hub-body{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px}',
     '.zero-card{padding:10px;border-radius:8px;background:var(--background-secondary,#2b2d31);display:flex;flex-direction:column;gap:6px}',
@@ -758,12 +761,13 @@ export function zeroRuntime(): void {
   ].join('');
   function renderHub(): void {
     if (!hub) return;
-    if (!tabs.has(hubTab)) hubTab = ['messageReminder', 'smartBookmarks', 'quickNotes', 'smartText'].find((k) => tabs.has(k)) ?? '';
+    if (!tabs.has(hubTab)) hubTab = TAB_ORDER.find((k) => tabs.has(k)) ?? '';
     const bar = hub.querySelector('.zero-tabs')!;
-    const ORDER = ['messageReminder', 'smartBookmarks', 'quickNotes', 'smartText'];
-    bar.replaceChildren(...[...tabs].sort((a, b) => ORDER.indexOf(a[0]) - ORDER.indexOf(b[0])).map(([id, t]) => el('button', { type: 'button', role: 'tab', class: 'zero-tab', 'aria-selected': String(id === hubTab), text: t.label, onclick: () => { hubTab = id; renderHub(); } })));
+    bar.replaceChildren(...[...tabs].sort((a, b) => TAB_ORDER.indexOf(a[0]) - TAB_ORDER.indexOf(b[0])).map(([id, t]) => el('button', { type: 'button', role: 'tab', class: 'zero-tab', 'aria-selected': String(id === hubTab), text: t.label, onclick: () => { hubTab = id; renderHub(); } })));
     const body = hub.querySelector<HTMLElement>('.zero-hub-body')!;
+    leaveTab();
     body.replaceChildren();
+    shownTab = hubTab;
     try { tabs.get(hubTab)?.render(body); } catch { body.append(el('div', { class: 'zero-empty', text: 'Something went wrong in this tab.' })); }
   }
   function openHub(tab?: string): void {
@@ -782,7 +786,7 @@ export function zeroRuntime(): void {
     renderHub();
     syncHubButtons();
   }
-  function closeHub(): void { hub?.remove(); hub = null; document.documentElement.removeAttribute('data-zero-hub'); syncHubButtons(); }
+  function closeHub(): void { leaveTab(); hub?.remove(); hub = null; document.documentElement.removeAttribute('data-zero-hub'); syncHubButtons(); }
   const refreshHub = (id: string) => { if (hub && hubTab === id) renderHub(); };
   const HUB_ICON = 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm0 2v14h4V5H5Zm6 0v14h8V5h-8Zm2 2h4v2h-4V7Zm0 4h4v2h-4v-2Z';
   function syncHubButtons(): void { for (const b of document.querySelectorAll('.zero-hubbtn')) b.setAttribute('aria-pressed', String(!!hub)); }
@@ -805,6 +809,7 @@ export function zeroRuntime(): void {
     if (hub) renderHub();
   }
   function removeTab(id: string): void {
+    if (shownTab === id) leaveTab();
     tabs.delete(id);
     if (tabs.size) { if (hub) renderHub(); return; }
     closeHub(); closePopup(); removeDom(hubButtonPass); document.removeEventListener('keydown', hubKey, true);
@@ -1265,6 +1270,411 @@ export function zeroRuntime(): void {
         if ((window as any).Notification === Wrapped) (window as any).Notification = NativeN;
         set(false, 'key'); setCss('privacyMode', null);
       },
+    };
+  }
+
+  // ================================================================== voice & stream plugins
+  // (ConnectionDoctor, VoiceAnalytics, MicStudio, SmartAudioFocus). They read Discord's own call stores; nothing
+  // is recorded except numbers (VoiceAnalytics' call summaries, MicStudio's saved settings).
+
+  const RTC = () => store('RTCConnectionStore');
+  /** "rotterdam1234.discord.media" → "rotterdam". A Discord server region, never anyone's address. */
+  const region = (host: unknown): string | null => {
+    const m = /^([a-z]+(?:-[a-z]+)*)\d*\./i.exec(String(host ?? ''));
+    return m ? m[1]!.toLowerCase().slice(0, 40) : null;
+  };
+  const voiceChannel = (): string | null => store('SelectedChannelStore')?.getVoiceChannelId?.() ?? null;
+  /** Page-world media statistics (see mediastats.ts): jitter and concealment of received voice. */
+  function mediaStats(): Promise<any[]> {
+    return new Promise((resolve) => {
+      let done = false;
+      const fin = (v: any[]) => { if (done) return; done = true; document.removeEventListener('zero:rtc', on); resolve(v); };
+      const on = (e: Event) => { try { fin(JSON.parse(String((e as CustomEvent).detail)).streams ?? []); } catch { fin([]); } };
+      document.addEventListener('zero:rtc', on);
+      window.setTimeout(() => fin([]), 1500);
+      document.dispatchEvent(new CustomEvent('zero:rtc-req'));
+    });
+  }
+  const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+  const fmtDur = (ms: number) => { const s = Math.round(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h} h ${m} min` : m ? `${m} min` : `${s} s`; };
+  const STATE_NAMES: Record<string, string> = {
+    RTC_CONNECTED: 'Connected', RTC_CONNECTING: 'Connecting', RTC_DISCONNECTED: 'Connection lost', DISCONNECTED: 'Not connected',
+    AWAITING_ENDPOINT: 'Waiting for a voice server', AUTHENTICATING: 'Signing in to the voice server', ICE_CHECKING: 'Finding a network route',
+    DTLS_CONNECTING: 'Securing the connection', NO_ROUTE: 'No network route (firewall or VPN?)',
+  };
+
+  // ================================================================== ConnectionDoctor
+  {
+    const events: { at: number; text: string }[] = [];
+    const log = (text: string) => { events.unshift({ at: Date.now(), text }); events.length = Math.min(events.length, 40); refreshHub('connectionDoctor'); };
+    let offs: (() => void)[] = []; let live = 0; let lastHost = '';
+    const onState = (a: any) => {
+      if (a.streamKey || (a.context && a.context !== 'default')) return; // stream connections are not your voice
+      const r = region(a.hostname);
+      if (r && a.hostname !== lastHost && lastHost) log('Voice server changed to ' + r);
+      if (a.hostname) lastHost = a.hostname;
+      log((STATE_NAMES[a.state] ?? a.state) + (r && a.state === 'RTC_CONNECTED' ? ' (' + r + ')' : ''));
+    };
+    const onNet = () => log(navigator.onLine ? 'Network back online' : 'Network offline (Windows reports no connection)');
+    function advice(ping: number | null, loss: number | null, jitter: number | null, conceal: number | null, state: string): string[] {
+      const out: string[] = [];
+      if (!navigator.onLine) out.push('Windows reports no network. Check the cable or Wi-Fi.');
+      if (state === 'NO_ROUTE') out.push('No route to the voice server: a firewall, VPN or proxy is blocking UDP. Try without the VPN, or allow ZERO in the firewall.');
+      if (ping !== null && ping > 250) out.push('Very high ping. If the voice server is far away, ask the server owner to set a closer region (channel settings › Region override).');
+      else if (ping !== null && ping > 120) out.push('High ping. Wi-Fi, a VPN or downloads running at the same time are the usual causes.');
+      if (loss !== null && loss > 3) out.push('Your voice is losing packets on the way out. Wi-Fi interference or a busy upload (stream, cloud backup) are the usual causes. A cable usually fixes it.');
+      if (jitter !== null && jitter > 40) out.push('Unsteady connection (jitter). This sounds like robotic or choppy voice; Wi-Fi is the usual cause.');
+      if (conceal !== null && conceal > 3) out.push('Part of the voice you receive had to be patched up. The problem is between you and the server, or on the speaker\'s side.');
+      if (events.filter((e) => e.text === 'Connection lost' && Date.now() - e.at < 600_000).length >= 2) out.push('The call dropped several times in 10 minutes. Restarting the router, or trying a cable, usually helps.');
+      return out;
+    }
+    const render = (host: HTMLElement) => {
+      const body = el('div', { style: 'display:flex;flex-direction:column;gap:10px' });
+      host.append(body);
+      const draw = async () => {
+        const R = RTC(); const inCall = !!voiceChannel();
+        const state = String(R?.getState?.() ?? 'DISCONNECTED');
+        const pings: number[] = (R?.getPings?.() ?? []).map((p: any) => Number(p?.value ?? p)).filter((n: number) => Number.isFinite(n)).slice(-30);
+        const ping = inCall ? (R?.getLastPing?.() ?? null) : null;
+        const avgPing = inCall ? (R?.getAveragePing?.() ?? null) : null;
+        const lossRaw = inCall ? R?.getOutboundLossRate?.() : null;
+        const loss = typeof lossRaw === 'number' && Number.isFinite(lossRaw) ? Math.round(lossRaw * 10) / 10 : null;
+        const stats = inCall ? await mediaStats() : [];
+        const rx = stats.filter((s) => s.kind === 'audio' && s.dir === 'recv');
+        const jitter = rx.length ? Math.max(...rx.map((s) => s.jitterMs ?? 0)) : null;
+        const conceal = rx.length ? Math.max(...rx.map((s) => s.concealedPct ?? 0)) : null;
+        if (!body.isConnected) return;
+        const row = (k: string, v: string, warn = false) => el('div', { class: 'zero-row', style: 'justify-content:space-between' }, el('span', { class: 'zero-muted', text: k }), el('b', { text: v, style: warn ? 'color:#f0b232' : '' }));
+        const bars = el('div', { style: 'display:flex;align-items:flex-end;gap:2px;height:40px', 'aria-label': 'Recent pings' },
+          ...pings.map((p) => el('div', { title: p + ' ms', style: `flex:1;min-width:3px;border-radius:2px;height:${Math.max(3, Math.min(40, p / 6))}px;background:${p > 250 ? '#f23f43' : p > 120 ? '#f0b232' : '#23a55a'}` })));
+        const tips = advice(ping, loss, jitter, conceal, state);
+        body.replaceChildren(
+          el('div', { class: 'zero-card' },
+            row('Network', navigator.onLine ? 'Online' : 'Offline', !navigator.onLine),
+            row('Voice', inCall ? (STATE_NAMES[state] ?? state) : 'Not in a call', inCall && state !== 'RTC_CONNECTED'),
+            inCall ? row('Voice server', region(R?.getHostname?.()) ?? '–') : null,
+            inCall ? row('Ping', ping !== null ? `${ping} ms (average ${avgPing ?? '–'} ms)` : '–', (ping ?? 0) > 120) : null,
+            inCall ? row('Outgoing packet loss', loss !== null ? loss + ' %' : '–', (loss ?? 0) > 3) : null,
+            inCall && jitter !== null ? row('Jitter (received voice)', jitter + ' ms', jitter > 40) : null,
+            inCall && conceal !== null ? row('Received voice patched up', conceal + ' %', conceal > 3) : null,
+            inCall && R?.getQuality ? row('Discord\'s rating', String(R.getQuality())) : null,
+            inCall && pings.length > 1 ? bars : null),
+          inCall || tips.length ? el('div', { class: 'zero-card' }, el('b', { text: tips.length ? 'Advice' : 'Looks good' }), ...(tips.length ? tips.map((t) => el('div', { text: '• ' + t })) : [el('div', { class: 'zero-muted', text: 'Nothing unusual right now.' })])) : '',
+          el('div', { class: 'zero-muted', text: 'This session' }),
+          ...(events.length ? events.slice(0, 15).map((e) => el('div', { class: 'zero-row' }, el('span', { class: 'zero-muted', style: 'width:52px;flex:none', text: new Date(e.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }), el('span', { text: e.text })))
+            : [el('div', { class: 'zero-muted', text: 'No connection changes since ZERO started.' })]),
+          el('div', { class: 'zero-actions' }, el('button', { type: 'button', class: 'zero-btn small ghost', text: 'Copy report', onclick: () => {
+            const lines = ['ZERO ConnectionDoctor ' + new Date().toISOString(), 'Network: ' + (navigator.onLine ? 'online' : 'offline'), 'Voice: ' + (inCall ? state : 'not in a call'),
+              ...(inCall ? ['Server region: ' + (region(R?.getHostname?.()) ?? '-'), `Ping: ${ping ?? '-'} ms (avg ${avgPing ?? '-'})`, 'Outgoing loss: ' + (loss ?? '-') + ' %', 'Jitter: ' + (jitter ?? '-') + ' ms', 'Concealed: ' + (conceal ?? '-') + ' %'] : []),
+              ...tips.map((t) => 'Advice: ' + t), ...events.slice(0, 15).map((e) => new Date(e.at).toLocaleTimeString() + ' ' + e.text)];
+            void navigator.clipboard.writeText(lines.join('\n')).then(() => toast('Report copied (no addresses or names in it).'), () => toast('Could not copy.'));
+          } })));
+      };
+      void draw();
+      live = window.setInterval(() => { if (!document.hidden) void draw(); }, 2000);
+    };
+    plugins.connectionDoctor = {
+      start() {
+        ensureUiCss();
+        offs = [on('RTC_CONNECTION_STATE', onState)];
+        window.addEventListener('online', onNet); window.addEventListener('offline', onNet);
+        addTab('connectionDoctor', { label: 'Connection', render, leave: () => { clearInterval(live); live = 0; } });
+      },
+      stop() { offs.forEach((f) => f()); offs = []; clearInterval(live); window.removeEventListener('online', onNet); window.removeEventListener('offline', onNet); removeTab('connectionDoctor'); },
+    };
+  }
+
+  // ================================================================== VoiceAnalytics
+  {
+    const D = () => (pdata.voiceAnalytics ??= { calls: [] }) as { calls: any[] };
+    let cur: { start: number; channelId: string; place: string; pings: number[]; losses: number[]; servers: string[]; disconnects: number; reconnects: number; wasLost: boolean } | null = null;
+    let offs: (() => void)[] = []; let poll = 0;
+    const placeOf = (channelId: string) => {
+      const ch = store('ChannelStore')?.getChannel?.(channelId);
+      if (!ch) return 'Call';
+      if (ch.type === 1 || ch.type === 3) return 'Private call';
+      const g = ch.guild_id ? store('GuildStore')?.getGuild?.(ch.guild_id) : null;
+      return (g ? g.name + ' › ' : '') + (ch.name ?? 'Voice');
+    };
+    function begin(channelId: string): void {
+      cur = { start: Date.now(), channelId, place: placeOf(channelId), pings: [], losses: [], servers: [], disconnects: 0, reconnects: 0, wasLost: false };
+      clearInterval(poll); poll = window.setInterval(sample, 10_000);
+    }
+    function sample(): void {
+      if (!cur) return;
+      const R = RTC();
+      const p = R?.getLastPing?.(); if (typeof p === 'number' && p > 0 && p < 100_000) cur.pings.push(p);
+      const l = R?.getOutboundLossRate?.(); if (typeof l === 'number' && Number.isFinite(l)) cur.losses.push(l);
+      const r = region(R?.getHostname?.()); if (r && cur.servers[cur.servers.length - 1] !== r) cur.servers.push(r);
+      if (cur.pings.length > 720) { cur.pings = cur.pings.slice(-720); cur.losses = cur.losses.slice(-720); }
+    }
+    function end(): void {
+      clearInterval(poll); poll = 0;
+      sample();
+      const c = cur; cur = null;
+      if (!c || Date.now() - c.start < 15_000) return; // a misclick, not a call
+      const pa = avg(c.pings), la = avg(c.losses);
+      D().calls.unshift({
+        id: newId(), start: c.start, end: Date.now(), place: c.place,
+        pingAvg: pa === null ? null : Math.round(pa), pingMax: c.pings.length ? Math.max(...c.pings) : null,
+        lossAvg: la === null ? null : Math.round(la * 100) / 100, lossMax: c.losses.length ? Math.round(Math.max(...c.losses) * 100) / 100 : null,
+        servers: c.servers.slice(0, 10), disconnects: c.disconnects, reconnects: c.reconnects,
+      });
+      D().calls = D().calls.slice(0, 200);
+      saveData('voiceAnalytics'); refreshHub('voiceAnalytics');
+    }
+    const onSelect = (a: any) => {
+      const next = a.channelId ?? null;
+      if (cur && cur.channelId !== next) end();
+      if (next && !cur) begin(next);
+    };
+    const onState = (a: any) => {
+      if (!cur || a.streamKey || (a.context && a.context !== 'default')) return;
+      if (a.state === 'RTC_DISCONNECTED') { cur.disconnects++; cur.wasLost = true; }
+      if (a.state === 'RTC_CONNECTED' && cur.wasLost) { cur.reconnects++; cur.wasLost = false; }
+      if (a.state === 'RTC_CONNECTED') sample();
+    };
+    const render = (host: HTMLElement) => {
+      const calls = D().calls;
+      const week = calls.filter((c) => Date.now() - c.start < 7 * 86_400_000);
+      const total = week.reduce((a, c) => a + (c.end - c.start), 0);
+      host.append(
+        el('div', { class: 'zero-muted', text: 'Numbers only, kept on this PC: duration, ping, packet loss, voice server, drops. Never audio, never who was there.' }),
+        el('div', { class: 'zero-card' },
+          el('div', { class: 'zero-row', style: 'justify-content:space-between' }, el('span', { class: 'zero-muted', text: 'Last 7 days' }), el('b', { text: `${week.length} call${week.length === 1 ? '' : 's'} · ${fmtDur(total)}` })),
+          cur ? el('div', { class: 'zero-row', style: 'justify-content:space-between' }, el('span', { class: 'zero-muted', text: 'Now' }), el('b', { text: cur.place + ' · ' + fmtDur(Date.now() - cur.start) })) : null));
+      if (!calls.length) host.append(el('div', { class: 'zero-empty', text: 'No finished calls yet. A call shows up here when you leave it.' }));
+      for (const c of calls.slice(0, 50)) {
+        const warn = (c.lossAvg ?? 0) > 3 || (c.pingAvg ?? 0) > 150 || c.disconnects > 0;
+        host.append(el('div', { class: 'zero-card' },
+          el('div', { class: 'zero-card-head' }, el('b', { text: c.place }), el('span', { class: 'zero-sp', text: when(c.start) })),
+          el('div', { class: 'zero-chips' },
+            el('span', { class: 'zero-tag', text: '⏱ ' + fmtDur(c.end - c.start) }),
+            c.pingAvg !== null ? el('span', { class: 'zero-tag', text: `ping ${c.pingAvg} ms (max ${c.pingMax})` }) : null,
+            c.lossAvg !== null ? el('span', { class: 'zero-tag', text: `loss ${c.lossAvg} %` }) : null,
+            c.servers.length ? el('span', { class: 'zero-tag', text: (c.servers.length > 1 ? 'servers ' : 'server ') + c.servers.join(' → ') }) : null,
+            c.disconnects ? el('span', { class: 'zero-tag', style: 'color:#f0b232', text: `${c.disconnects} drop${c.disconnects > 1 ? 's' : ''}, ${c.reconnects} reconnected` }) : null),
+          warn ? el('div', { class: 'zero-muted', text: 'This call had connection trouble. The Connection tab explains the usual causes.' }) : null));
+      }
+      if (calls.length) host.append(el('div', { class: 'zero-actions' }, el('button', { type: 'button', class: 'zero-btn small ghost', text: 'Clear history', onclick: () => { D().calls = []; saveData('voiceAnalytics'); renderHub(); } })));
+    };
+    plugins.voiceAnalytics = {
+      start() {
+        ensureUiCss();
+        offs = [on('VOICE_CHANNEL_SELECT', onSelect), on('RTC_CONNECTION_STATE', onState)];
+        const ch = voiceChannel(); if (ch) begin(ch);
+        addTab('voiceAnalytics', { label: 'Calls', render });
+      },
+      stop() { end(); offs.forEach((f) => f()); offs = []; removeTab('voiceAnalytics'); },
+    };
+  }
+
+  // ================================================================== MicStudio
+  {
+    const D = () => (pdata.micStudio ??= { profiles: [] }) as { profiles: any[] };
+    let test: { stream: MediaStream; ctx: AudioContext; an: AnalyserNode; mon: GainNode; raf: number; rms: number[]; clips: number; samples: number; started: number } | null = null;
+    let actions: any = undefined;
+    const ME = () => store('MediaEngineStore');
+    const audioActions = () => {
+      // Several exports are proxies that answer any property name: check that the method really is Discord's.
+      if (actions === undefined) { actions = null; eachExport((v) => { try { if (typeof v?.setNoiseSuppression === 'function' && String(v.setNoiseSuppression).includes('AUDIO_SET_NOISE_SUPPRESSION') && String(v.setInputVolume).includes('AUDIO_SET_INPUT_VOLUME')) { actions = v; return true; } } catch { /* not it */ } return false; }); }
+      return actions;
+    };
+    const db = (x: number) => (x > 0 ? 20 * Math.log10(x) : -120);
+    function stopTest(): void {
+      if (!test) return;
+      cancelAnimationFrame(test.raf);
+      test.stream.getTracks().forEach((t) => t.stop()); // releases the microphone
+      void test.ctx.close();
+      test = null;
+    }
+    const current = () => {
+      const M = ME(); const opts = M?.getModeOptions?.() ?? {};
+      const devs = M?.getInputDevices?.() ?? {};
+      const id = M?.getInputDeviceId?.() ?? 'default';
+      return {
+        inputDeviceId: id, inputDeviceName: devs[id]?.name ?? '', inputVolume: M?.getInputVolume?.() ?? 100,
+        mode: M?.getMode?.() === 'PUSH_TO_TALK' ? 'PUSH_TO_TALK' : 'VOICE_ACTIVITY', threshold: opts.threshold ?? -60, autoThreshold: opts.autoThreshold !== false,
+        echoCancellation: !!M?.getEchoCancellation?.(), noiseSuppression: !!M?.getNoiseSuppression?.(), automaticGainControl: !!M?.getAutomaticGainControl?.(), noiseCancellation: !!M?.getNoiseCancellation?.(),
+      };
+    };
+    /** Applies a profile with Discord's own voice-setting actions, the ones its Voice & Video page calls. */
+    function applyProfile(p: any): void {
+      const A = audioActions(); const M = ME();
+      if (!A || !M) { toast('Discord\'s voice settings are not available right now.'); return; }
+      const devs = M.getInputDevices?.() ?? {};
+      const missing = p.inputDeviceId !== 'default' && !devs[p.inputDeviceId];
+      try {
+        if (!missing && p.inputDeviceId !== M.getInputDeviceId()) A.setInputDevice(p.inputDeviceId);
+        A.setInputVolume?.(p.inputVolume);
+        A.setMode?.(p.mode, { threshold: p.threshold, autoThreshold: p.autoThreshold });
+        if (M.getEchoCancellation() !== p.echoCancellation) A.setEchoCancellation?.(p.echoCancellation);
+        if (M.getNoiseSuppression() !== p.noiseSuppression) A.setNoiseSuppression?.(p.noiseSuppression);
+        if (M.getAutomaticGainControl() !== p.automaticGainControl) A.setAutomaticGainControl?.(p.automaticGainControl);
+        if (M.getNoiseCancellation() !== p.noiseCancellation) A.setNoiseCancellation?.(p.noiseCancellation);
+      } catch { toast('Some settings could not be applied.'); return; }
+      toast('Profile "' + p.name + '" applied.' + (missing ? ' Its microphone (' + (p.inputDeviceName || 'saved device') + ') is not plugged in, so the device was left as it is.' : ''));
+      refreshHub('micStudio');
+    }
+    function diagnose(t: NonNullable<typeof test>, cfg: ReturnType<typeof current>): string[] {
+      const out: string[] = [];
+      if (Date.now() - t.started < 4000) return ['Measuring… say a few words at your normal volume.'];
+      const sorted = [...t.rms].sort((a, b) => a - b);
+      const q = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))] ?? -120;
+      const floor = q(0.1), speech = q(0.95);
+      if (speech < -75) return ['No sound at all from this microphone. It may be muted in Windows (Sound settings › Input), used by another app in exclusive mode, or not the one you are talking into.'];
+      if (t.samples && t.clips / t.samples > 0.002) out.push('Your voice is clipping (too loud, it will crackle). Lower the input volume or the microphone gain in Windows.');
+      if (speech < -40) out.push('Your voice is quiet. Move closer to the microphone, or raise the input volume.');
+      if (floor > -50) out.push('A lot of background noise (' + Math.round(floor) + ' dB). Noise suppression (Krisp) helps; a fan, PC case or open window are common sources.');
+      if (cfg.mode === 'VOICE_ACTIVITY' && !cfg.autoThreshold) {
+        if (cfg.threshold < floor + 3) out.push('Your voice-activity sensitivity (' + cfg.threshold + ' dB) is at or below the background noise: Discord will send noise. Raise it above ' + Math.round(floor + 6) + ' dB, or use automatic sensitivity.');
+        else if (cfg.threshold > speech - 6) out.push('Your voice-activity sensitivity (' + cfg.threshold + ' dB) is close to your speaking level: words will get cut. Lower it below ' + Math.round(speech - 10) + ' dB.');
+      }
+      if (!out.length) out.push('Sounds good: background ' + Math.round(floor) + ' dB, voice ' + Math.round(speech) + ' dB, no clipping.');
+      return out;
+    }
+    async function startTest(deviceId: string, proc: { ec: boolean; ns: boolean; agc: boolean }, monitor: boolean, onFrame: (level: number, peak: number) => void): Promise<string | null> {
+      stopTest();
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: deviceId && deviceId !== 'default' ? { exact: deviceId } : undefined, echoCancellation: proc.ec, noiseSuppression: proc.ns, autoGainControl: proc.agc } });
+        const ctx = new AudioContext();
+        const src = ctx.createMediaStreamSource(stream);
+        const an = ctx.createAnalyser(); an.fftSize = 2048;
+        const mon = ctx.createGain(); mon.gain.value = monitor ? 1 : 0;
+        src.connect(an); src.connect(mon); mon.connect(ctx.destination);
+        const buf = new Float32Array(an.fftSize);
+        test = { stream, ctx, an, mon, raf: 0, rms: [], clips: 0, samples: 0, started: Date.now() };
+        let last = 0;
+        const frame = (now: number) => {
+          if (!test) return;
+          test.raf = requestAnimationFrame(frame);
+          if (now - last < 50) return; last = now;
+          an.getFloatTimeDomainData(buf);
+          let sum = 0, peak = 0;
+          for (const v of buf) { sum += v * v; const a = Math.abs(v); if (a > peak) peak = a; if (a >= 0.99) test.clips++; }
+          test.samples += buf.length;
+          const level = db(Math.sqrt(sum / buf.length));
+          test.rms.push(level); if (test.rms.length > 200) test.rms.shift();
+          onFrame(level, db(peak));
+        };
+        test.raf = requestAnimationFrame(frame);
+        return null;
+      } catch (e: any) {
+        return e?.name === 'NotAllowedError' ? 'Microphone access was refused.' : e?.name === 'NotFoundError' || e?.name === 'OverconstrainedError' ? 'This microphone is not available (unplugged?).' : 'Could not open the microphone.';
+      }
+    }
+    const render = (host: HTMLElement) => {
+      const cfg = current();
+      const devs = Object.values(ME()?.getInputDevices?.() ?? {}) as any[];
+      const dev = el('select', { 'aria-label': 'Microphone' }, ...(devs.length ? devs : [{ id: 'default', name: 'Default' }]).map((d) => el('option', { value: d.id, text: d.name, selected: d.id === cfg.inputDeviceId })));
+      const box = (label: string, on: boolean) => { const i = el('input', { type: 'checkbox', checked: on }); return { i, l: el('label', { class: 'zero-row', style: 'gap:6px' }, i, el('span', { text: label })) }; };
+      const ec = box('Echo cancellation', cfg.echoCancellation), ns = box('Noise suppression', cfg.noiseSuppression), agc = box('Auto gain', cfg.automaticGainControl), mon = box('Hear myself (use headphones)', false);
+      const meter = el('div', { style: 'height:14px;border-radius:7px;background:var(--background-tertiary,#1e1f22);overflow:hidden;position:relative' });
+      const fill = el('div', { style: 'height:100%;width:0;background:#23a55a;transition:width .05s linear' });
+      const mark = cfg.mode === 'VOICE_ACTIVITY' && !cfg.autoThreshold ? el('div', { title: 'Your voice-activity sensitivity', style: `position:absolute;top:0;bottom:0;width:2px;background:#fff;left:${Math.max(0, Math.min(100, (cfg.threshold + 100)))}%` }) : null;
+      meter.append(fill); if (mark) meter.append(mark);
+      const readout = el('div', { class: 'zero-muted', text: 'Not testing.' });
+      const tips = el('div', { style: 'display:flex;flex-direction:column;gap:4px' });
+      const btn = el('button', { type: 'button', class: 'zero-btn primary', text: test ? 'Stop test' : 'Start test' });
+      let tick = 0;
+      btn.addEventListener('click', async () => {
+        if (test) { stopTest(); clearInterval(tick); btn.textContent = 'Start test'; readout.textContent = 'Not testing.'; fill.style.width = '0'; return; }
+        btn.textContent = 'Opening…';
+        const err = await startTest(dev.value, { ec: ec.i.checked, ns: ns.i.checked, agc: agc.i.checked }, mon.i.checked, (level, peak) => {
+          fill.style.width = Math.max(0, Math.min(100, level + 100)) + '%';
+          fill.style.background = peak > -1 ? '#f23f43' : level > -20 ? '#f0b232' : '#23a55a';
+          readout.textContent = `Level ${Math.round(level)} dB · peak ${Math.round(peak)} dB`;
+        });
+        if (err) { btn.textContent = 'Start test'; toast(err); return; }
+        btn.textContent = 'Stop test';
+        clearInterval(tick);
+        tick = window.setInterval(() => { if (!test || !tips.isConnected) { clearInterval(tick); return; } tips.replaceChildren(...diagnose(test, current()).map((t) => el('div', { text: '• ' + t }))); }, 1000);
+      });
+      mon.i.addEventListener('change', () => { if (test) test.mon.gain.value = mon.i.checked ? 1 : 0; });
+      const notice = ME()?.getNoInputDetectedNotice?.() ? el('div', { class: 'zero-card', style: 'color:#f0b232', text: 'Discord reports that it hears nothing from your microphone in calls.' }) : null;
+      host.append(
+        el('div', { class: 'zero-muted', text: 'A local test: the sound never leaves your PC and is not recorded. The checkboxes only change this test, not Discord.' }),
+        notice ?? '',
+        el('div', { class: 'zero-card' }, dev, el('div', { class: 'zero-chips' }, ec.l, ns.l, agc.l), mon.l, meter, readout, el('div', { class: 'zero-actions' }, btn), tips));
+      // profiles of Discord's own voice settings
+      const name = el('input', { type: 'text', placeholder: 'Profile name (e.g. Gaming, Late night)', maxLength: 40 });
+      const save = () => {
+        const n = name.value.trim().slice(0, 40); if (!n) { name.focus(); return; }
+        const d = D(); if (d.profiles.length >= 20 && !d.profiles.some((p) => p.name === n)) { toast('20 profiles is the limit.'); return; }
+        d.profiles = [...d.profiles.filter((p) => p.name !== n), { id: newId(), name: n, ...current() }];
+        saveData('micStudio'); toast('Saved "' + n + '".'); renderHub();
+      };
+      name.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
+      const c = current();
+      host.append(
+        el('div', { class: 'zero-muted', style: 'font-weight:700;text-transform:uppercase', text: 'Voice profiles' }),
+        el('div', { class: 'zero-muted', text: `Discord now: ${c.inputDeviceName || 'default mic'}, volume ${Math.round(c.inputVolume)}%, ${c.mode === 'PUSH_TO_TALK' ? 'push to talk' : c.autoThreshold ? 'voice activity (auto)' : 'voice activity ' + c.threshold + ' dB'}, echo ${c.echoCancellation ? 'on' : 'off'}, noise suppression ${c.noiseSuppression ? 'on' : 'off'}, Krisp ${c.noiseCancellation ? 'on' : 'off'}, auto gain ${c.automaticGainControl ? 'on' : 'off'}.` }),
+        el('div', { class: 'zero-row' }, name, el('button', { type: 'button', class: 'zero-btn small', text: 'Save current', onclick: save })));
+      for (const p of D().profiles) host.append(el('div', { class: 'zero-card' },
+        el('div', { class: 'zero-card-head' }, el('b', { text: p.name }), el('span', { class: 'zero-sp', text: p.inputDeviceName || 'default mic' })),
+        el('div', { class: 'zero-muted', text: `volume ${Math.round(p.inputVolume)}% · ${p.mode === 'PUSH_TO_TALK' ? 'push to talk' : p.autoThreshold ? 'voice activity (auto)' : 'voice activity ' + p.threshold + ' dB'} · Krisp ${p.noiseCancellation ? 'on' : 'off'}` }),
+        el('div', { class: 'zero-actions' },
+          el('button', { type: 'button', class: 'zero-btn small primary', text: 'Apply', onclick: () => applyProfile(p) }),
+          el('button', { type: 'button', class: 'zero-btn small ghost', text: 'Delete', onclick: () => { D().profiles = D().profiles.filter((x) => x.id !== p.id); saveData('micStudio'); renderHub(); } }))));
+    };
+    plugins.micStudio = {
+      start() { ensureUiCss(); addTab('micStudio', { label: 'Mic', render, leave: stopTest }); },
+      stop() { stopTest(); removeTab('micStudio'); },
+    };
+  }
+
+  // ================================================================== SmartAudioFocus
+  {
+    let s: Settings = {};
+    const origPlay = HTMLMediaElement.prototype.play;
+    let names: Map<string, string> | null = null;
+    /** Discord's sound files: "/assets/<hash>.mp3" → sound name, from its own sound list. */
+    function soundNames(): Map<string, string> {
+      if (names) return names;
+      names = new Map();
+      const r = wreq(); const mod = bySource('"./message1.mp3":', '"./user_join.mp3":');
+      const map = mod ? /var \w+=(\{[^}]*\})/.exec(mod.source)?.[1] : null;
+      if (!r || !map) return names;
+      try {
+        for (const [file, id] of Object.entries(JSON.parse(map) as Record<string, string>)) {
+          try { const url = r(id); const u = typeof url === 'string' ? url : url?.default; if (typeof u === 'string') names.set(u, file.replace(/^\.\//, '').replace(/\.mp3$/, '')); } catch { /* skip */ }
+        }
+      } catch { /* unknown format: nothing is changed */ }
+      return names;
+    }
+    const category = (n: string): string | null => {
+      if (/ringing|calling/.test(n)) return null; // never touch an incoming call
+      if (/^mention\d$/.test(n)) return 'mentions';
+      if (/(^|_)message\d$/.test(n)) return 'messages';
+      if (/(user_join|user_leave|user_moved|activity_user_join|activity_user_left)$/.test(n)) return 'voice';
+      if (n.startsWith('stream_')) return 'streams';
+      if (/(mute|unmute|deafen|undeafen|defean|undefean|ptt_start|ptt_stop)$/.test(n)) return 'self';
+      return null;
+    };
+    const active = (): boolean => {
+      const streaming = !!store('ApplicationStreamingStore')?.getCurrentUserActiveStream?.();
+      if (s.when === 'stream') return streaming;
+      if (s.when === 'game') return !!game || streaming;
+      return !!voiceChannel() || streaming;
+    };
+    function play(this: HTMLMediaElement): Promise<void> {
+      try {
+        const src = this.currentSrc || this.src;
+        if (src && src.includes('/assets/')) {
+          const n = soundNames().get(new URL(src, location.href).pathname);
+          const cat = n ? category(n) : null;
+          const rule = cat ? s[cat] : null;
+          if (rule && rule !== 'normal' && active()) {
+            if (rule === 'mute') return Promise.resolve();
+            this.volume = Math.max(0, Math.min(1, this.volume * (Number(s.level) || 25) / 100));
+          }
+        }
+      } catch { /* never block a sound because of ZERO */ }
+      return origPlay.call(this);
+    }
+    plugins.smartAudioFocus = {
+      start(next) { s = next; HTMLMediaElement.prototype.play = play; },
+      stop() { if (HTMLMediaElement.prototype.play === play) HTMLMediaElement.prototype.play = origPlay; },
     };
   }
 
