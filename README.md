@@ -36,6 +36,7 @@ Custom themes and backgrounds that actually apply everywhere, with no restart ne
   - Tools: ZERO Dashboard, MultiPanel (a second channel side by side), DownloadManager, ClipboardManager, QuickNotes.
   - Appearance and privacy: ThemeStudio, WorkspaceProfiles, NotificationProfiles, PrivacyMode.
   - `Ctrl+Shift+L` opens the ZERO panel inside Discord.
+- **Saving files:** click a file, or the download button of an attachment, to save it; right-click an image or video to save it in its original size, copy it or copy its link. Text fields get cut, copy and paste. With DownloadManager on, files can go straight to your Downloads folder.
 - **Style add-ons:** CSS-only add-ons from your plugins folder, with explicit permissions.
 - **Streaming:** Go Live and watching streams work in ZERO. Pick a screen or an app window, and turn on **Share sound** to stream your PC's audio (Windows only: Electron cannot capture system sound on Linux). Your voice call is left out of the stream, so viewers don't hear an echo.
 

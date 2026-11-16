@@ -1,0 +1,14 @@
+{
+  "summary": "You can now save the pictures, videos and files people send you.",
+  "changes": [
+    "Clicking a file or the download button of an attachment saves it, instead of doing nothing.",
+    "Right-click an image or a video to save it in its original size, copy it or copy its link. Links can be opened in your browser or copied."
+  ],
+  "improvements": [
+    "Text fields have a right-click menu with cut, copy and paste.",
+    "Images are saved from the original file, not the resized preview shown in the chat."
+  ],
+  "fixes": [
+    "Files sent in Discord could not be downloaded in ZERO, on Windows and on Linux."
+  ]
+}

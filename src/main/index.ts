@@ -33,6 +33,7 @@ import { activeBuiltins, BUILTINS, sanitizeBuiltin, supportOn } from '../shared/
 import { PluginDataStore } from './pluginData';
 import { isDataPlugin, PAGE_DATA_PLUGINS, type PluginData, type Workspace } from '../shared/pluginData';
 import { createDownloads } from './downloads';
+import { attachContextMenu, download as downloadMedia } from './media';
 import { createTranslator } from './translate';
 import { createVoiceOverlay, type OverlaySettings } from './voiceOverlay';
 import { createSidePanel, SIDE_PATH } from './sidePanel';
@@ -387,12 +388,16 @@ function hardenSession(ses: Electron.Session) {
 
 function guardNavigation(wc: WebContents) {
   wc.setWindowOpenHandler(({ url }) => {
+    // Files people send (CDN, media proxy) open a new tab in a browser: here they are downloaded (main/media.ts).
+    if (downloadMedia(wc, url)) return { action: 'deny' };
     if (/^https:/i.test(url) && !isDiscordUrl(url)) void shell.openExternal(url);
     return { action: 'deny' };
   });
   wc.on('will-navigate', (e, url) => {
+    if (downloadMedia(wc, url)) { e.preventDefault(); return; } // never leave Discord for a bare file
     if (!isDiscordUrl(url)) { e.preventDefault(); if (/^https:/i.test(url)) void shell.openExternal(url); }
   });
+  attachContextMenu(wc, isDiscordUrl);
 }
 
 function updateRoute(url: string) {
